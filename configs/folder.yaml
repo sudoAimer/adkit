@@ -1,0 +1,23 @@
+model:
+  name: anomalydino
+  weights: weights/dinov2_vits14/model.safetensors
+  device: cuda
+  positional_encoding: official
+data:
+  format: folder
+  normal_dir: datasets/mvtec-ad/bottle/train/good
+  test_path: datasets/mvtec-ad/bottle/test/broken_large/000.png
+  image_size: 448
+  rotation: true
+  shots: 1
+  sampling: official
+run:
+  mode: fit_predict
+  seeds: [0]
+  batch_size: 1
+output:
+  directory: outputs/folder_example
+  save_maps: true
+  visualize: true
+evaluation:
+  pro_fpr_limit: 0.3

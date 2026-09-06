@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "training-free-ad"
+version = "0.1.0"
+description = "Configuration-driven training-free visual anomaly detection"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "torchvision", "timm>=1.0", "safetensors", "numpy", "scipy", "scikit-learn", "opencv-python", "Pillow", "PyYAML"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+reference = ["faiss-cpu", "matplotlib", "tifffile", "tqdm", "pandas", "kornia"]
+subspacead = ["transformers==4.57.6"]
+
+[project.scripts]
+tfad = "tfad.run:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

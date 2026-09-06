@@ -1,0 +1,31 @@
+model:
+  name: anomalydino
+  encoder_name: vit_small_patch14_dinov2.lvd142m
+  weights: weights/dinov2_vits14/model.safetensors
+  device: cuda
+  num_neighbours: 1
+  masking: false
+  mask_ref_images: false
+  query_chunk: 1024
+  bank_chunk: 16384
+  sigma: 4.0
+  positional_encoding: official
+data:
+  format: mvtec
+  root: datasets/mvtec-ad
+  category: bottle
+  image_size: 448
+  rotation: true
+  shots: 1 # -1 uses all normal training images
+  sampling: official # sorted [seed*k:(seed+1)*k]; random is also supported
+run:
+  mode: evaluate # fit, predict, fit_predict, evaluate
+  seeds: [0, 1, 2]
+  batch_size: 1
+  checkpoint: null # required for mode=predict
+output:
+  directory: outputs/bottle_official
+  save_maps: true
+  visualize: true
+evaluation:
+  pro_fpr_limit: 0.3

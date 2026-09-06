@@ -1,0 +1,13 @@
+{
+  "source": "https://arxiv.org/html/2602.23013v1#A1.T5",
+  "table": 5,
+  "category": "Bottle",
+  "shots": 1,
+  "units": "percent",
+  "image_auroc": 100.0,
+  "image_ap": 100.0,
+  "pixel_auroc": 98.6,
+  "aupro": 96.1,
+  "pixel_ap": null,
+  "note": "Paper reports means; exact sample list and repetitions are not specified. Current repository benchmark script uses seed 42. Runtime also measures seeds 43 and 44."
+}

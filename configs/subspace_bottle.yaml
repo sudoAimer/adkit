@@ -1,0 +1,30 @@
+model:
+  name: subspacead
+  weights: weights/dinov2_with_registers_giant
+  device: cuda
+  layers: [-12, -13, -14, -15, -16, -17, -18]
+  explained_variance: 0.99
+  components: null
+  pca_device: cuda
+data:
+  format: mvtec
+  root: datasets/mvtec-ad
+  category: bottle
+  image_size: 672
+  augmentation: subspacead
+  aug_count: 30
+  shots: 1
+  sampling: subspacead
+run:
+  mode: evaluate
+  seeds: [42, 43, 44]
+  batch_size: 1
+  cpu_threads: 4
+  checkpoint: null
+output:
+  directory: outputs/subspace_bottle
+  save_maps: true
+  visualize: true
+evaluation:
+  resolution: input
+  pro_fpr_limit: 0.3

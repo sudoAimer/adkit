@@ -1,0 +1,6 @@
+[submodule "references/dinov2"]
+	path = references/dinov2
+	url = https://github.com/facebookresearch/dinov2.git
+[submodule "references/SubspaceAD"]
+	path = references/SubspaceAD
+	url = https://github.com/CLendering/SubspaceAD.git
