@@ -1,3 +1,4 @@
+# 使用本地权重运行 SubspaceAD 官方对照。
 """Run original SubspaceAD main.py offline and compare every bottle prediction.
 
 Only download/loading and unused saliency attention retention are adapted.
@@ -18,9 +19,9 @@ import torch
 from transformers import AutoImageProcessor, AutoModel
 import yaml
 
-from tfad.data import samples, prepare, read_rgb
-from tfad.metrics import evaluate
-from tfad.subspacead import SubspaceADDetector
+from adkit.data import samples, prepare, read_rgb
+from adkit.metrics import evaluate
+from adkit.subspacead import SubspaceADDetector
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT/'references/SubspaceAD'
@@ -32,6 +33,7 @@ spec.loader.exec_module(official)
 
 
 def run_seed(seed):
+    """运行单个种子的官方 SubspaceAD 对照并记录差异。"""
     config = yaml.safe_load((ROOT/'configs/subspace_bottle.yaml').read_text())
     output = ROOT/'outputs/subspace_official_reference'/f'seed_{seed}'
     output.mkdir(parents=True,exist_ok=True)
@@ -39,12 +41,14 @@ def run_seed(seed):
     feature_errors, captured_maps, captured_pca, sampled_pro = [], [], [], []
 
     def initialize(self,model_ckpt):
+        """将官方骨干加载替换为本地权重，并对照特征提取结果。"""
         local_weights = str(ROOT/config['model']['weights'])
         self.processor = AutoImageProcessor.from_pretrained(local_weights,local_files_only=True,use_fast=False)
         self.model = AutoModel.from_pretrained(local_weights,local_files_only=True,
                                                attn_implementation='eager').eval().requires_grad_(False).cuda()
         forward = self.model.forward
         def without_unused_attention(*args,**kwargs):
+            """关闭不使用的注意力输出，同时保留官方接口需要的占位值。"""
             kwargs['output_attentions'] = False
             result = forward(*args,**kwargs)
             # Original extractor checks for non-None even when no mask is used.
@@ -53,7 +57,7 @@ def run_seed(seed):
         self.model.forward = without_unused_attention
         probe = SubspaceADDetector.__new__(SubspaceADDetector)
         probe.encoder, probe.device = self.model, torch.device('cuda')
-        probe.config = config['model']
+        probe.layers = tuple(config['model']['layers'])
         probe.patch_size = self.model.config.patch_size
         for record in [records[0],next(r for r in records if r['label']==0),records[-1]]:
             rgb = read_rgb(record['path'])
@@ -64,10 +68,12 @@ def run_seed(seed):
         print(f'Official seed {seed}: feature extraction comparison {feature_errors}',flush=True)
 
     def unused_saliency(self,attentions,dino_saliency_layer,num_reg,drop_front,n_expected,batch_size,h_p,w_p):
+        """返回占位显著性图，避免缓存未使用的注意力。"""
         return np.zeros((batch_size,h_p,w_p),dtype=np.float32)
 
     original_post = official.post_process_map
     def record_map(*args,**kwargs):
+        """记录官方异常图及其输出文件。"""
         result = original_post(*args,**kwargs)
         captured_maps.append(result.copy())
         key = records[len(captured_maps)-1]['key']
@@ -80,6 +86,7 @@ def run_seed(seed):
 
     original_fit = official.PCAModel.fit
     def record_fit(self,*args,**kwargs):
+        """记录官方 PCA 拟合状态以供离线对照。"""
         result = original_fit(self,*args,**kwargs)
         captured_pca.append(result)
         torch.save({k:torch.from_numpy(v) if isinstance(v,np.ndarray) else v for k,v in result.items()},output/'pca.pt')
@@ -88,6 +95,7 @@ def run_seed(seed):
 
     original_pro = official.compute_aupro
     def record_pro(*args,**kwargs):
+        """记录官方采样式 AUPRO 结果。"""
         result = original_pro(*args,**kwargs)
         sampled_pro.append(float(result))
         return result

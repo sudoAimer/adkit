@@ -1,4 +1,4 @@
-# Training-free AD
+# adkit
 
 轻量、离线运行的 Python 异常检测库。目前实现 AnomalyDINO 和 SubspaceAD；通过 YAML 选择算法、模型参数和数据，无 Lightning/FastAPI 依赖。
 
@@ -49,13 +49,17 @@ SubspaceAD 的 `weights` 是包含 `model.safetensors`、`config.json`、`prepro
 
 ```python
 import yaml
-from tfad import create_detector
-from tfad.data import samples, select_reference, reference_batches
-from tfad.anomalydino import AnomalyDinoDetector
+from adkit import create_detector, load_detector
+from adkit.data import samples, select_reference, reference_batches
+from adkit.anomalydino import AnomalyDinoDetector
 
 with open('configs/bottle.yaml', encoding='utf-8') as file:
     config = yaml.safe_load(file)
-detector = create_detector(config['model'])
+detector = AnomalyDinoDetector(
+    weights=config['model']['weights'],
+    device='cuda',
+    num_neighbours=1,
+)
 normal, tests = samples(config['data'])
 selected = select_reference(normal, shots=1, seed=0)
 detector.fit(reference_batches(selected, config['data']))
@@ -73,9 +77,9 @@ restored = AnomalyDinoDetector.load('outputs/example.pt', device='cuda')
 | `anomaly_map` | `[B,1,H,W]` | 输入 Tensor 分辨率下的异常图 |
 | `patch_map` | `[B,1,H/14,W/14]` | AnomalyDINO 的未平滑 patch 距离图，供原图尺度渲染 |
 
-SubspaceAD 返回 `pred_score` 和 `anomaly_map`，不返回 AnomalyDINO 专用的 `patch_map`。使用 `create_detector(model_config, checkpoint=path)` 可以按配置加载任一算法。
+SubspaceAD 返回 `pred_score` 和 `anomaly_map`，不返回 AnomalyDINO 专用的 `patch_map`。使用 `create_detector("anomalydino", weights=path, device="cuda")` 按名称构造算法；使用 `load_detector("subspacead", checkpoint_path, device="cuda")` 加载检查点（从 `adkit` 导入）。
 
-`fit` 重建参考库，不执行反向传播。检查点只含参考库、参数、元数据和权重 SHA256，不重复包含骨干权重；迁移机器时可在 `load(..., weights=新路径)` 指定同一权重文件。
+`fit` 重建参考库，不执行反向传播。检查点格式为 2，构造参数存于 `init_params`，不兼容旧格式；项目版本保持 `0.1.0`。检查点只含参考库、参数、元数据和权重 SHA256，不重复包含骨干权重；迁移机器时可在 `load(..., weights=新路径)` 指定同一权重文件。
 
 SubspaceAD 检查点保存均值、PCA 基、特征值及配置，不保存正常样本特征库。其 `fit` 接收 Tensor 批次：单次迭代器缓存特征做两遍统计；`ReferenceBatches` 可重复迭代并在第二遍重新生成旋转，与当前官方代码一致。
 
@@ -111,3 +115,16 @@ conda run --no-capture-output -n detect python tools/compare_subspace_official.p
 ```
 
 需要先完成 `configs/subspace_bottle.yaml`。此脚本调用保存于 `references/SubspaceAD` 的官方 `main.py`，调整本地权重加载、未使用的 saliency 存储，并将 NumPy 2.4 已移除的 `trapz` 映射到等价的 `trapezoid`。报告见 `reports/subspace-bottle-baseline.md`，并分别列出论文附录、当前官方代码和本库结果。
+
+## 代码结构与参数约定
+
+- `src/adkit/base.py`：定义检测器生命周期接口。
+- `src/adkit/factory.py`：按名称构造或加载检测器，延迟导入算法依赖。
+- `src/adkit/anomalydino.py`、`subspacead.py`：显式构造参数、特征提取及算法状态。
+- `src/adkit/data.py`、`metrics.py`：数据处理与评估工具。
+- `src/adkit/run.py`：解析 YAML 并组织运行，命令为 `adkit --config configs/bottle.yaml`。
+
+模型参数通过 `__init__` 传入，实例使用独立属性，不再提供 `self.config`。
+YAML 是命令行实验入口；`samples`、`ReferenceBatches` 继续接收数据配置。
+检查点加载以保存的算法参数为准，仅覆盖 `device` 和 `weights`；修改算法参数应重新构造并建库。
+旧包导入和旧检查点需要迁移或重新生成。

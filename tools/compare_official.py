@@ -1,3 +1,4 @@
+# 使用本地权重运行 AnomalyDINO 官方对照。
 """Run untouched official detection code with offline backbone loading.
 
 Requires references/AnomalyDINO, references/dinov2 and faiss-cpu.
@@ -17,10 +18,10 @@ from safetensors.torch import load_file
 import torch
 import yaml
 
-from tfad import create_detector
-from tfad.data import samples, prepare, read_rgb
-from tfad.anomalydino import render_map
-from tfad.metrics import evaluate
+from adkit import create_detector
+from adkit.data import samples, prepare, read_rgb
+from adkit.anomalydino import render_map
+from adkit.metrics import evaluate
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'references'/'AnomalyDINO'))
@@ -32,6 +33,7 @@ from dinov2.hub.backbones import dinov2_vits14
 
 
 def main():
+    """解析命令行参数并启动本文件对应的运行流程。"""
     config = yaml.safe_load((ROOT/'configs/bottle.yaml').read_text())
     destination = ROOT/'outputs/official_reference'
     destination.mkdir(parents=True, exist_ok=True)
@@ -48,7 +50,7 @@ def main():
     with patch('torch.hub.load', return_value=backbone):
         wrapper = DINOv2Wrapper('dinov2_vits14', 'cuda', smaller_edge_size=448)
     _, tests = samples(config['data'])
-    our_model = create_detector(config['model'])
+    our_model = create_detector(**config['model'])
     feature_errors = []
     for record in [tests[0], next(t for t in tests if t['label']==0), tests[-1]]:
         image = read_rgb(record['path'])

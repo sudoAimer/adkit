@@ -1,3 +1,4 @@
+# 图像级与像素级异常检测评估指标。
 """Exact ranking metrics and region-weighted PRO, without threshold sampling."""
 import numpy as np
 from scipy.ndimage import label
@@ -5,6 +6,7 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 
 
 def aupro(maps, masks, limit=.3):
+    """按精确分数排序积分计算限定假阳性率范围内的区域重叠指标。"""
     if not 0 < limit <= 1:
         raise ValueError("PRO FPR limit must lie in (0,1]")
     changes = []
@@ -38,6 +40,7 @@ def aupro(maps, masks, limit=.3):
 
 
 def evaluate(labels, scores, maps, masks, pro_fpr_limit=.3):
+    """汇总图像级和像素级指标，拒绝缺少必要类别的输入。"""
     if len(labels) == 0 or len(set(labels)) != 2:
         raise ValueError("Evaluation requires both normal and anomalous test images")
     if not (len(labels) == len(scores) == len(maps) == len(masks)):

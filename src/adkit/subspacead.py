@@ -1,3 +1,4 @@
+# SubspaceAD 检测器：多层冻结特征与两遍 PCA 重建评分。
 # SPDX-License-Identifier: Apache-2.0
 # Adapted from CLendering/SubspaceAD (revision in THIRD_PARTY.md).
 """Frozen multi-layer DINOv2 features and two-pass PCA reconstruction."""
@@ -14,6 +15,7 @@ from .base import BaseDetector
 
 
 def file_sha256(path):
+    """分块计算文件哈希，避免一次性读入大型权重。"""
     digest = hashlib.sha256()
     with Path(path).open('rb') as file:
         for block in iter(lambda:file.read(1024*1024),b''):
@@ -22,7 +24,8 @@ def file_sha256(path):
 
 
 def fit_pca(feature_batches, device='cpu', explained_variance=.99, components=None):
-    """Two passes over a callable feature source, matching the author's PCA.
+    """两遍统计均值和协方差，以解释方差或指定维数确定 PCA 子空间。
+    Two passes over a callable feature source, matching the author's PCA.
 
     A re-iterable image source regenerates augmentations on pass two, as the
     official implementation does. This detail is recorded in the benchmark.
@@ -75,6 +78,7 @@ def fit_pca(feature_batches, device='cpu', explained_variance=.99, components=No
 
 def reconstruction_scores(features, state):
     # Preserve official float32 NumPy scoring after the FP64 PCA fit.
+    """以官方 float32 精度计算特征在 PCA 子空间中的重建误差。"""
     x = np.asarray(features,dtype=np.float32)
     mu = state['mu'].numpy().astype(x.dtype)
     basis = state['components'].numpy().astype(x.dtype)
@@ -83,13 +87,28 @@ def reconstruction_scores(features, state):
 
 
 def subspace_map(patches, shape):
+    """将 patch 误差缩放到输入尺寸，并采用官方固定参数平滑。"""
     resized = cv2.resize(np.asarray(patches,dtype=np.float32),(shape[1],shape[0]),interpolation=cv2.INTER_LINEAR)
     return cv2.GaussianBlur(resized,(3,3),4.)
 
 
 class SubspaceADDetector(BaseDetector):
-    def __init__(self, weights, device='cuda', layers=None, explained_variance=.99,
-                 components=None, pca_device=None):
+    def __init__(
+        self,
+        weights: str | Path,
+        device: str = "cuda",
+        layers: list[int] | tuple[int, ...] | None = None,
+        explained_variance: float = .99,
+        components: int | None = None,
+        pca_device: str | None = None,
+    ) -> None:
+        """从本地模型目录初始化冻结骨干与空 PCA 状态。
+
+        weights 目录需包含权重、模型配置和预处理配置。
+        layers 指定参与平均的隐藏层，负数按末尾索引，内部保存为元组。
+        components 指定维数时优先使用该值，否则按 explained_variance 选取。
+        device 用于特征提取；pca_device 默认跟随 device，用于 PCA 统计。
+        """
         weights = Path(weights).resolve()
         weight_file = weights/'model.safetensors'
         for file in [weight_file,weights/'config.json',weights/'preprocessor_config.json']:
@@ -100,9 +119,12 @@ class SubspaceADDetector(BaseDetector):
         layers = list(layers if layers is not None else [-12,-13,-14,-15,-16,-17,-18])
         if not layers:
             raise ValueError('At least one feature layer is required')
-        self.config = dict(weights=str(weights),device=device,layers=layers,
-                           explained_variance=explained_variance,components=components,
-                           pca_device=pca_device or device)
+        # 构造参数保存为独立属性，计算过程不依赖配置字典。
+        self.weights = str(weights)
+        self.layers = tuple(layers)
+        self.explained_variance = explained_variance
+        self.components = components
+        self.pca_device = torch.device(pca_device or device)
         self.weight_sha256 = file_sha256(weight_file)
         self.asset_hashes = {name:file_sha256(weights/name) for name in ['config.json','preprocessor_config.json']}
         self.device = torch.device(device)
@@ -119,6 +141,7 @@ class SubspaceADDetector(BaseDetector):
 
     @torch.inference_mode()
     def extract_features(self,batch):
+        """提取冻结骨干的 patch 特征，保持算法对应的特征协议。"""
         if batch.ndim != 4 or batch.shape[1] != 3 or len(batch)==0:
             raise ValueError('Expected nonempty [B,3,H,W] image batch')
         if batch.shape[-2]%self.patch_size or batch.shape[-1]%self.patch_size:
@@ -126,10 +149,11 @@ class SubspaceADDetector(BaseDetector):
         outputs = self.encoder(pixel_values=batch.to(self.device,dtype=torch.float32),
                                output_hidden_states=True,output_attentions=False)
         drop = 1+getattr(self.encoder.config,'num_register_tokens',0)
-        features = torch.stack([outputs.hidden_states[i][:,drop:,:] for i in self.config['layers']],dim=0).mean(0)
+        features = torch.stack([outputs.hidden_states[i][:,drop:,:] for i in self.layers],dim=0).mean(0)
         return features
 
     def fit(self,batches):
+        """使用正常图像批次重建参考状态，不执行反向传播。"""
         if iter(batches) is batches:
             # A single-use Tensor iterator cannot regenerate augmentation. Cache
             # its features and use the same samples on both statistical passes.
@@ -137,14 +161,16 @@ class SubspaceADDetector(BaseDetector):
             source = lambda: iter(cached)
         else:
             def source():
+                """每次调用重新遍历特征源，为两遍 PCA 统计提供数据。"""
                 for batch in batches:
                     yield self.extract_features(batch).reshape(-1,self.encoder.config.hidden_size).cpu().numpy()
-        state = fit_pca(source,self.config['pca_device'],self.config['explained_variance'],self.config['components'])
+        state = fit_pca(source,self.pca_device,self.explained_variance,self.components)
         self.pca_state = state
         self.reference_patches = state['reference_patches']
 
     @torch.inference_mode()
     def predict(self,batch):
+        """基于已建立的参考状态返回 CPU 异常分数和异常图。"""
         if self.pca_state is None:
             raise RuntimeError('PCA state is empty; call fit or load first')
         features = self.extract_features(batch)
@@ -156,13 +182,25 @@ class SubspaceADDetector(BaseDetector):
         scores = np.partition(flat,flat.shape[1]-k,axis=1)[:,-k:].mean(1)
         return {'pred_score':torch.from_numpy(scores),'anomaly_map':torch.from_numpy(maps[:,None])}
 
+    def _init_params(self) -> dict:
+        """将构造参数导出为可序列化字典，仅用于保存检查点。"""
+        return {
+            "weights": self.weights,
+            "layers": list(self.layers),
+            "explained_variance": self.explained_variance,
+            "components": self.components,
+            "pca_device": str(self.pca_device),
+            "device": str(self.device),
+        }
+
     def save(self,path):
+        """原子保存构造参数、参考状态与权重校验信息，不保存骨干权重。"""
         if self.pca_state is None:
             raise RuntimeError('Cannot save an unfitted PCA model')
         path = Path(path)
         path.parent.mkdir(parents=True,exist_ok=True)
         temporary = path.with_suffix(path.suffix+'.tmp')
-        torch.save({'format_version':1,'algorithm':'subspacead','config':self.config,
+        torch.save({'format_version':2,'algorithm':'subspacead','init_params':self._init_params(),
                     'weight_sha256':self.weight_sha256,'pca_state':self.pca_state,
                     'asset_hashes':self.asset_hashes,
                     'metadata':self.metadata},temporary)
@@ -170,16 +208,17 @@ class SubspaceADDetector(BaseDetector):
 
     @classmethod
     def load(cls,path,device='cpu',weights=None):
+        """加载新格式检查点并校验参考状态，允许覆盖设备与权重路径。"""
         saved = torch.load(path,map_location='cpu',weights_only=True)
-        if saved.get('algorithm')!='subspacead' or saved.get('format_version')!=1:
+        if saved.get('algorithm')!='subspacead' or saved.get('format_version')!=2:
             raise ValueError('Unsupported SubspaceAD checkpoint')
-        config = dict(saved['config'],device=device,pca_device=device)
+        params = dict(saved['init_params'],device=device,pca_device=device)
         if weights is not None:
-            config['weights'] = weights
-        model = cls(**config)
+            params['weights'] = weights
+        model = cls(**params)
         if model.weight_sha256 != saved['weight_sha256']:
             raise ValueError('Backbone weight checksum does not match PCA state')
-        if saved.get('asset_hashes',model.asset_hashes) != model.asset_hashes:
+        if saved['asset_hashes'] != model.asset_hashes:
             raise ValueError('Backbone/processor config checksum does not match PCA state')
         state = saved['pca_state']
         d = model.encoder.config.hidden_size

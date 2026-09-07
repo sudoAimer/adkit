@@ -1,16 +1,18 @@
+# 基础算法、数据几何与指标的回归测试。
 import numpy as np
 import pytest
 import torch
 from torch.nn import functional as F
 
-from tfad import create_detector
-from tfad.anomalydino import exact_knn, render_map
-from tfad.data import prepare, select_reference
-from tfad.metrics import aupro, evaluate
+from adkit import create_detector
+from adkit.anomalydino import exact_knn, render_map
+from adkit.data import prepare, select_reference
+from adkit.metrics import aupro, evaluate
 
 
 @pytest.mark.parametrize('k', [1, 3, 7])
 def test_chunked_knn_matches_dense(k):
+    """检查分块近邻搜索与完整距离矩阵一致。"""
     generator = torch.Generator().manual_seed(42)
     query = F.normalize(torch.randn(13, 8, generator=generator), dim=-1)
     bank = F.normalize(torch.randn(19, 8, generator=generator), dim=-1)
@@ -20,13 +22,15 @@ def test_chunked_knn_matches_dense(k):
 
 
 def test_invalid_algorithm_and_empty_bank():
+    """检查未知算法与空参考库的错误处理。"""
     with pytest.raises(ValueError, match='Unknown algorithm'):
-        create_detector({'name': 'missing'})
+        create_detector('missing')
     with pytest.raises(ValueError):
         exact_knn(torch.ones(1, 3), torch.empty(0, 3))
 
 
 def test_official_reference_selection():
+    """检查官方参考图切片协议与样本数量约束。"""
     paths = ['002.png', '000.png', '001.png']
     assert [select_reference(paths, 1, seed)[0] for seed in range(3)] == sorted(paths)
     assert len(select_reference(paths, -1, 0)) == 3
@@ -35,6 +39,7 @@ def test_official_reference_selection():
 
 
 def test_non_square_geometry():
+    """检查非正方形图像的预处理和异常图坐标。"""
     image = np.zeros((101, 157, 3), dtype=np.uint8)
     tensor = prepare(image, 56)
     assert tensor.shape == (3, 56, 84)
@@ -47,6 +52,7 @@ def test_non_square_geometry():
 
 
 def test_metrics_perfect_and_tied():
+    """检查完美预测和分数相同时的指标结果。"""
     masks = [np.zeros((8, 8), dtype=bool), np.zeros((8, 8), dtype=bool)]
     masks[1][2:4, 2:4] = True
     maps = [m.astype(np.float32) for m in masks]
@@ -58,6 +64,7 @@ def test_metrics_perfect_and_tied():
 
 
 def test_metrics_reject_invalid_input():
+    """检查指标计算拒绝非法输入。"""
     with pytest.raises(ValueError, match='both normal'):
         evaluate([0], [0.], [np.zeros((2, 2))], [np.zeros((2, 2))])
     with pytest.raises(ValueError):
