@@ -1,3 +1,4 @@
+# 命令行运行入口；相对路径基于当前工作目录解析。
 """YAML entry point. Relative paths resolve against the project working directory."""
 import argparse
 import csv
@@ -13,22 +14,25 @@ from PIL import Image
 import torch
 import yaml
 
-from . import create_detector
+from .factory import create_detector, load_detector
 from .anomalydino import render_map
 from .data import samples, select_reference, ReferenceBatches, read_rgb, prepare
 from .metrics import evaluate
 
 
 def write_json(path, data):
+    """写入 UTF-8 JSON，禁止非有限浮点值进入运行记录。"""
     Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False), encoding='utf-8')
 
 
 def synchronize(device):
+    """在 CUDA 设备上同步任务，确保计时覆盖实际计算。"""
     if str(device).startswith('cuda'):
         torch.cuda.synchronize(device)
 
 
 def run(config):
+    """根据 YAML 组织采样、建库、推理与结果输出。"""
     torch.set_num_threads(config['run'].get('cpu_threads', 4))
     mode = config['run'].get('mode', 'evaluate')
     if mode not in {'fit', 'predict', 'fit_predict', 'evaluate'}:
@@ -54,14 +58,18 @@ def run(config):
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
         if mode == 'predict':
-            model = create_detector(config['model'], checkpoint=config['run']['checkpoint'])
+            model = load_detector(
+                config['model']['name'], config['run']['checkpoint'],
+                device=config['model'].get('device', 'cpu'),
+                weights=config['model'].get('weights'),
+            )
             saved_data = model.metadata.get('data', {})
             if saved_data.get('image_size') != data.get('image_size', 448):
                 raise ValueError("Inference image_size differs from saved reference preprocessing")
             selected = model.metadata.get('reference_samples', [])
             fit_seconds = 0.
         else:
-            model = create_detector(config['model'])
+            model = create_detector(**config['model'])
             selected = select_reference(normal, data.get('shots', -1), seed, data.get('sampling', 'official'))
             synchronize(model.device)
             start = time.perf_counter()
@@ -97,7 +105,7 @@ def run(config):
             # Official path: directly resize patch distances to the original image,
             # then smooth once; don't resize an already smoothed model-input map.
             input_map = prediction['anomaly_map'][0,0].numpy()
-            amap = render_map(patch, rgb.shape[:2], model.config['sigma']) if patch is not None else cv2.resize(
+            amap = render_map(patch, rgb.shape[:2], model.sigma) if patch is not None else cv2.resize(
                 input_map,(rgb.shape[1],rgb.shape[0]),interpolation=cv2.INTER_LINEAR)
             score = float(prediction['pred_score'][0])
             rows.append({'key': sample['key'], 'path': sample['path'], 'label': sample['label'],
@@ -156,6 +164,7 @@ def run(config):
 
 
 def main():
+    """解析命令行参数并启动本文件对应的运行流程。"""
     logging.basicConfig(level=logging.INFO,format='%(message)s')
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', required=True)

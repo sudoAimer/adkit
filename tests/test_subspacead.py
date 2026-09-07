@@ -1,3 +1,4 @@
+# SubspaceAD 的 PCA、采样和离线检查点回归测试。
 import importlib.util
 import json
 from pathlib import Path
@@ -10,12 +11,13 @@ import torch
 from PIL import Image
 from transformers import BitImageProcessor, Dinov2WithRegistersConfig, Dinov2WithRegistersModel
 
-from tfad import create_detector
-from tfad.data import prepare, select_reference, ReferenceBatches
-from tfad.subspacead import fit_pca, reconstruction_scores, subspace_map
+from adkit import create_detector, load_detector
+from adkit.data import prepare, select_reference, ReferenceBatches
+from adkit.subspacead import fit_pca, reconstruction_scores, subspace_map
 
 
 def test_pca_matches_dense_projection():
+    """检查分批 PCA 与完整矩阵投影一致。"""
     x = np.random.default_rng(7).normal(size=(70,8)).astype(np.float32)
     state = fit_pca(lambda: iter(np.array_split(x,5)),components=4)
     mean = x.astype(np.float64).mean(0)
@@ -27,6 +29,7 @@ def test_pca_matches_dense_projection():
 
 
 def test_pca_official_two_pass_equivalence():
+    """检查两遍 PCA 与官方实现一致。"""
     path = Path(__file__).resolve().parents[1]/'references/SubspaceAD/src/subspacead/core/pca.py'
     if not path.exists():
         pytest.skip('Official reference source absent')
@@ -35,6 +38,7 @@ def test_pca_official_two_pass_equivalence():
     spec.loader.exec_module(module)
     data = np.random.default_rng(8).normal(size=(50,6)).astype(np.float32)
     def source():
+        """每次调用重新遍历特征源，为两遍 PCA 统计提供数据。"""
         return iter(np.array_split(data,5))
     reference = module.PCAModel(ev=.9)
     reference.device = torch.device('cpu')
@@ -46,6 +50,7 @@ def test_pca_official_two_pass_equivalence():
 
 
 def test_subspace_reference_selection():
+    """检查 SubspaceAD 的种子打乱采样协议。"""
     paths = [f'{i:03}.png' for i in range(209)]
     rng = random.Random(42)
     rng.shuffle(paths)
@@ -53,6 +58,7 @@ def test_subspace_reference_selection():
 
 
 def test_invalid_pca_passes():
+    """检查空数据、零方差及两遍样本数量不一致的错误处理。"""
     with pytest.raises(ValueError,match='at least two'):
         fit_pca(lambda: iter([]))
     with pytest.raises(ValueError,match='zero variance'):
@@ -63,6 +69,7 @@ def test_invalid_pca_passes():
 
 
 def test_tiny_offline_subspace_roundtrip(tmp_path):
+    """使用微型离线骨干检查 SubspaceAD 保存加载与资产校验。"""
     torch.set_num_threads(2)
     asset = tmp_path/'weights'
     config = Dinov2WithRegistersConfig(hidden_size=16,num_hidden_layers=2,num_attention_heads=4,
@@ -71,7 +78,7 @@ def test_tiny_offline_subspace_roundtrip(tmp_path):
     BitImageProcessor().save_pretrained(asset)
     options = dict(name='subspacead',weights=str(asset),device='cpu',layers=[-1,-2],components=3)
     with patch('socket.create_connection',side_effect=AssertionError('Unexpected network')):
-        model = create_detector(options)
+        model = create_detector(**options)
         image = np.random.default_rng(2).integers(0,256,size=(35,51,3),dtype=np.uint8)
         tensor = prepare(image,28,processor=model.processor).unsqueeze(0)
         assert tensor.shape == (1,3,28,28)
@@ -86,7 +93,7 @@ def test_tiny_offline_subspace_roundtrip(tmp_path):
         model.save(tmp_path/'model.pt')
         saved = torch.load(tmp_path/'model.pt',weights_only=True)
         assert 'memory_bank' not in saved and 'encoder' not in saved
-        loaded = create_detector(options,checkpoint=tmp_path/'model.pt')
+        loaded = load_detector('subspacead', tmp_path/'model.pt', device='cpu', weights=asset)
         torch.testing.assert_close(result['anomaly_map'],loaded.predict(tensor)['anomaly_map'],rtol=0,atol=0)
         loaded.fit([tensor])
         assert loaded.reference_patches == 4
@@ -95,10 +102,11 @@ def test_tiny_offline_subspace_roundtrip(tmp_path):
         processor_config['rescale_factor'] = .5
         processor_path.write_text(json.dumps(processor_config))
         with pytest.raises(ValueError,match='processor config checksum'):
-            create_detector(options,checkpoint=tmp_path/'model.pt')
+            load_detector('subspacead', tmp_path/'model.pt', device='cpu', weights=asset)
 
 
 def test_two_pass_augmentations_regenerate(tmp_path):
+    """检查两遍迭代保留原图并重新生成随机增强。"""
     file = tmp_path/'image.png'
     image = np.random.default_rng(4).integers(0,256,size=(56,56,3),dtype=np.uint8)
     Image.fromarray(image).save(file)
@@ -111,10 +119,12 @@ def test_two_pass_augmentations_regenerate(tmp_path):
 
 
 def test_map_preserves_shape():
+    """检查异常图输出尺寸符合目标尺寸。"""
     assert subspace_map(np.ones((3,4)),(42,56)).shape == (42,56)
 
 
 def test_fullshot_has_no_fewshot_augmentation(tmp_path):
+    """检查全样本模式不执行少样本增强。"""
     image = tmp_path/'normal.png'
     Image.fromarray(np.zeros((28,28,3),dtype=np.uint8)).save(image)
     source = ReferenceBatches([image],{'image_size':28,'shots':-1,'augmentation':'subspacead','aug_count':30})

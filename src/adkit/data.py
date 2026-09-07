@@ -1,3 +1,4 @@
+# 图像读取、数据集解析、参考样本选择与批次生成。
 """Image and dataset helpers; no dataset framework required."""
 from pathlib import Path
 import json
@@ -11,17 +12,20 @@ from torchvision import transforms
 
 
 def image_paths(path):
+    """收集支持的图像文件并返回绝对路径。"""
     path = Path(path)
     candidates = [path] if path.is_file() else sorted(path.rglob('*'))
     return [p.resolve() for p in candidates if p.suffix.lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}]
 
 
 def read_rgb(path):
+    """读取图像并统一转换为 RGB 数组。"""
     with Image.open(path) as image:
         return np.array(image.convert('RGB'))
 
 
 def prepare(image, image_size=448, patch_size=14, processor=None):
+    """根据算法处理器缩放归一化图像，并满足 patch 尺寸要求。"""
     if image_size < patch_size:
         raise ValueError("image_size must be at least one patch")
     if processor is not None:
@@ -42,6 +46,7 @@ def prepare(image, image_size=448, patch_size=14, processor=None):
 
 
 def augment(image, rotation):
+    """按配置生成固定角度旋转图像。"""
     for angle in range(0, 360, 45) if rotation else [None]:
         if angle is None:
             yield image
@@ -53,6 +58,7 @@ def augment(image, rotation):
 
 
 def reference_batches(paths, config, batch_size=1, processor=None):
+    """根据数据配置生成参考批次，尺寸不同时提前结束当前批次。"""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     pending = []
@@ -83,14 +89,17 @@ def reference_batches(paths, config, batch_size=1, processor=None):
 class ReferenceBatches:
     """Re-iterable batches for two-pass PCA; augmentations regenerate per pass."""
     def __init__(self, paths, config, batch_size=1, processor=None):
+        """保存路径、数据配置和批大小，延迟到遍历时读取图像。"""
         self.args = paths, config, batch_size, processor
 
     def __iter__(self):
+        """每次遍历重新生成批次，使两遍 PCA 能重新采样增强。"""
         return reference_batches(*self.args)
 
 
 def samples(config):
-    """Return normal paths and test records with optional masks/labels."""
+    """解析普通目录或 MVTec 数据，检查图像和标注路径。
+    Return normal paths and test records with optional masks/labels."""
     kind = config.get('format', 'mvtec')
     if kind == 'folder':
         normal = image_paths(config['normal_dir']) if config.get('normal_dir') else []
@@ -128,6 +137,7 @@ def samples(config):
 
 
 def select_reference(paths, shots, seed, sampling='official'):
+    """按指定采样协议和种子选择正常参考图像。"""
     if not paths:
         raise ValueError("No normal reference images found")
     if shots == -1:
