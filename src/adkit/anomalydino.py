@@ -20,6 +20,7 @@ from torch.nn import functional as F
 from safetensors.torch import load_file
 
 from .base import BaseDetector
+from .data import pad_to_patch
 
 
 def render_map(patch_map, shape, sigma=4.0):
@@ -107,8 +108,7 @@ class AnomalyDinoDetector(BaseDetector):
         """提取冻结骨干的 patch 特征，保持算法对应的特征协议。"""
         if batch.ndim != 4 or batch.shape[1] != 3 or len(batch) == 0:
             raise ValueError("Expected non-empty [B,3,H,W] tensor")
-        if batch.shape[-1] % self.patch_size or batch.shape[-2] % self.patch_size:
-            raise ValueError("Image dimensions must be divisible by the patch size")
+        batch = pad_to_patch(batch, self.patch_size)
         batch = batch.to(self.device, dtype=torch.float32)
         if self.positional_encoding == 'timm':
             tokens = self.encoder.forward_features(batch)
@@ -150,6 +150,7 @@ class AnomalyDinoDetector(BaseDetector):
         """使用正常图像批次重建参考状态，不执行反向传播。"""
         embeddings = []
         for batch in batches:
+            batch = pad_to_patch(batch, self.patch_size)
             features = self.extract_features(batch)
             grid = (batch.shape[-2]//self.patch_size, batch.shape[-1]//self.patch_size)
             masks = self._masks(features, grid, self.masking and self.mask_ref_images)
@@ -166,6 +167,8 @@ class AnomalyDinoDetector(BaseDetector):
         """基于已建立的参考状态返回 CPU 异常分数和异常图。"""
         if not len(self.memory_bank):
             raise RuntimeError("Reference bank is empty; call fit or load first")
+        original_shape = batch.shape[-2:]
+        batch = pad_to_patch(batch, self.patch_size)
         features = self.extract_features(batch)
         grid = (batch.shape[-2]//self.patch_size, batch.shape[-1]//self.patch_size)
         masks = self._masks(features, grid, self.masking)
@@ -177,7 +180,7 @@ class AnomalyDinoDetector(BaseDetector):
         score = distances.topk(max(1, int(distances.shape[1]*.01)), dim=1).values.mean(dim=1)
         patches = distances.reshape(-1, 1, *grid).cpu()
         maps = np.stack([render_map(p[0].numpy(), batch.shape[-2:], self.sigma) for p in patches])
-        return {'pred_score': score.cpu(), 'anomaly_map': torch.from_numpy(maps[:, None]),
+        return {'pred_score': score.cpu(), 'anomaly_map': torch.from_numpy(maps[:, None, :original_shape[0], :original_shape[1]]),
                 'patch_map': patches}
 
     def _init_params(self) -> dict:

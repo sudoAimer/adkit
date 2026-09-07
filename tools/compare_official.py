@@ -55,7 +55,7 @@ def main():
     for record in [tests[0], next(t for t in tests if t['label']==0), tests[-1]]:
         image = read_rgb(record['path'])
         official_tensor, _ = wrapper.prepare_image(image)
-        our_tensor = prepare(image, 448)
+        our_tensor = prepare(image, 448, alignment='legacy')
         torch.testing.assert_close(official_tensor, our_tensor, rtol=0, atol=0)
         ref = wrapper.extract_features(official_tensor)
         actual = our_model.extract_features(our_tensor.unsqueeze(0))[0].cpu().numpy()

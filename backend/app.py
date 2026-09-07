@@ -14,9 +14,10 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .engine import DetectorEngine
-from .schemas import TaskCreate, ThresholdUpdate
+from .schemas import TaskCreate, ThresholdUpdate, LabelUpdate
 from .service import TaskService
 from .store import TaskStore
+from .assessment import assess, task_algorithms
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 20 * 1024 * 1024
@@ -60,6 +61,29 @@ def create_app() -> FastAPI:
         """创建可持续补充样本的检测任务。"""
         return service.create(body.model_dump())
 
+    @app.post('/api/tasks/{task_id}/comparison', status_code=201)
+    def create_comparison(task_id: str):
+        """Copy an idle task's images and labels into an independent paired run."""
+        with store.lock:
+            source = store.idle(task_id)
+            task = service.create(dict(name=(source['name'][:54] + ' · 对比'),
+                algorithm='comparison', image_size=source['image_size'], rotation=source['rotation']))
+            destination = store.directory(task['id'])
+            try:
+                (destination / 'images').mkdir()
+                for kind in ['normal', 'test']:
+                    for original in source[kind]:
+                        item = dict(original)
+                        shutil.copy2(store.directory(task_id) / 'images' / item['file'],
+                                     destination / 'images' / item['file'])
+                        item['url'] = f"/api/tasks/{task['id']}/files/images/{item['file']}"
+                        task[kind].append(item)
+                task['source_task_id'] = task_id
+                return store.save(task)
+            except Exception:
+                shutil.rmtree(destination)
+                raise
+
     @app.get("/api/tasks/{task_id}")
     def get_task(task_id: str):
         """提供页面刷新与任务轮询所需的完整快照。"""
@@ -77,7 +101,32 @@ def create_app() -> FastAPI:
         """仅保存图像判定阈值，已有分数与热力图无需重新计算。"""
         with store.lock:
             task = store.read(task_id)
-            task["threshold"] = body.threshold
+            algorithm = body.algorithm or task['algorithm']
+            if algorithm not in task_algorithms(task):
+                raise HTTPException(400, '请选择此任务中的模型')
+            task.setdefault('thresholds', {})[algorithm] = {
+                'threshold': body.threshold, 'area_threshold': body.area_threshold}
+            if task['algorithm'] != 'comparison':
+                task.update(threshold=body.threshold, area_threshold=body.area_threshold)
+            return store.save(task)
+
+    @app.post('/api/tasks/{task_id}/assessment')
+    def assessment(task_id: str, body: ThresholdUpdate):
+        with store.lock:
+            task = store.read(task_id)
+            algorithm = body.algorithm or task['algorithm']
+            if algorithm not in task_algorithms(task):
+                raise HTTPException(400, '请选择此任务中的模型')
+            return assess(task, store.directory(task_id), algorithm, body.threshold, body.area_threshold)
+
+    @app.patch('/api/tasks/{task_id}/images/test/{image_id}/label')
+    def label_image(task_id: str, image_id: str, body: LabelUpdate):
+        with store.lock:
+            task = store.read(task_id)
+            item = next((i for i in task['test'] if i['id'] == image_id), None)
+            if item is None:
+                raise HTTPException(404, '图片不存在')
+            item['label'] = body.label
             return store.save(task)
 
     @app.post("/api/tasks/{task_id}/images/{kind}", status_code=201)
@@ -105,8 +154,8 @@ def create_app() -> FastAPI:
                                 if image.format not in {"JPEG", "PNG", "WEBP", "BMP", "TIFF"}:
                                     raise ValueError("不支持的图片格式")
                                 w, h = image.size
-                                if w * h > MAX_PIXELS or max(w, h) > 4 * min(w, h):
-                                    raise ValueError("图片不能超过 1200 万像素，长宽比不能超过 4:1")
+                                if w * h > MAX_PIXELS:
+                                    raise ValueError("图片不能超过 1200 万像素")
                                 rgb = ImageOps.exif_transpose(image).convert("RGB")
                                 item_id = uuid4().hex
                                 filename = f"{item_id}.png"
@@ -116,7 +165,7 @@ def create_app() -> FastAPI:
                     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
                         raise HTTPException(400, f"图片无效：{upload_file.filename}（{exc}）") from exc
                     items.append({"id": item_id, "name": (upload_file.filename or "图片")[:200], "file": filename,
-                                  "url": f"/api/tasks/{task_id}/files/images/{filename}"})
+                                  "url": f"/api/tasks/{task_id}/files/images/{filename}", "label": None})
                 task[kind].extend(items)
                 service.invalidate(task, normal_changed=kind == "normal")
                 return store.save(task)

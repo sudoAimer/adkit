@@ -62,7 +62,7 @@ def run_seed(seed):
         for record in [records[0],next(r for r in records if r['label']==0),records[-1]]:
             rgb = read_rgb(record['path'])
             reference, _, _ = self.extract_tokens([Image.fromarray(rgb)],672,config['model']['layers'],'mean')
-            tensor = prepare(rgb,672,processor=self.processor).unsqueeze(0)
+            tensor = prepare(rgb,672,processor=self.processor,alignment='legacy').unsqueeze(0)
             ours = probe.extract_features(tensor).cpu().numpy().reshape(reference.shape)
             feature_errors.append(float(np.max(np.abs(reference-ours))))
         print(f'Official seed {seed}: feature extraction comparison {feature_errors}',flush=True)

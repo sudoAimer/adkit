@@ -99,9 +99,9 @@ Python 示例保存的检查点可通过 Python API 加载。YAML 的预测入�
 |---|---|---|
 | `pred_score` | `[B]` | 原始图像异常分数，非概率 |
 | `anomaly_map` | `[B,1,H,W]` | 输入 Tensor 分辨率的异常图 |
-| `patch_map` | `[B,1,H/14,W/14]` | AnomalyDINO 专用的未平滑 patch 距离图 |
+| `patch_map` | `[B,1,ceil(H/14),ceil(W/14)]` | AnomalyDINO 专用的未平滑 patch 距离图 |
 
-`H`、`W` 为预处理后的输入尺寸。SubspaceAD 不返回 `patch_map`。核心 API 不作阈值判定；工作台在图像分数上应用用户设置的阈值。
+`H`、`W` 为预处理后的输入尺寸。SubspaceAD 不返回 `patch_map`。核心 API 不作阈值判定；工作台应用用户设置的分数／面积阈值，详见 [工作台说明](../backend/README.md)。
 
 ## YAML 与命令行
 
@@ -169,6 +169,19 @@ YAML 建库运行保存在 `output.directory/seed_<seed>/`，独立预测保存�
 | `images/*.heat.png`、`*.overlay.png` | 热力图与叠加图 |
 | `summary.json` | 评估模式的多次运行指标汇总，位于输出根目录 |
 
-AnomalyDINO 保持比例缩放短边，裁去不能整除 patch 的底部和右侧余量；SubspaceAD 使用模型 processor 缩放为指定正方形尺寸。具体像素评估协议见 [评估文档](evaluation.md)。
+默认两个模型使用相同的尺寸处理：`image_size: null` 保留原图，正整数指定短边，`[H, W]` 指定高宽。高宽分别向上补齐到 patch 的倍数（边缘复制），异常图输出时移除补边并恢复原图坐标。历史官方配置显式使用 `alignment: legacy`，保留 AnomalyDINO 裁边、SubspaceAD 正方形预处理。具体像素评估协议见 [评估文档](evaluation.md)。
 
 网页工作台的任务文件独立保存在 `ADKIT_DATA_DIR` 中，目录和使用规则见 [工作台说明](../backend/README.md)。
+
+### 任意尺寸 Python 调用
+
+```python
+from adkit.data import prepare, restore_map
+batch, geometry = prepare(rgb, image_size=None, processor=getattr(detector, "processor", None),
+                          return_geometry=True)
+prediction = detector.predict(batch.unsqueeze(0))
+original_map = restore_map(prediction["anomaly_map"][0, 0].numpy(), geometry)
+```
+
+直接调用 `fit` / `predict` 也接受不整除的 BCHW Tensor，内部补边，`anomaly_map` 返回传入 Tensor 的高宽；`patch_map` 对应补齐后的 patch 网格。
+历史 YAML 检查点预测需保持与建库相同的尺寸和 `alignment`。历史官方示例已显式设为 `legacy`。

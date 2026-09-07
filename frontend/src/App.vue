@@ -15,12 +15,11 @@ import {
   Plus,
   RefreshCw,
   ScanLine,
-  SlidersHorizontal,
   Trash2,
   X,
-  Download,
   AlertCircle,
 } from "lucide-vue-next";
+import ResultsPanel from "./components/ResultsPanel.vue";
 import ImageUpload from "./components/ImageUpload.vue";
 import { request, uploadImages } from "./api";
 
@@ -35,13 +34,12 @@ const busy = ref(false);
 const uploadProgress = ref(null);
 const modal = ref(null);
 const newName = ref("");
-const newAlgorithm = ref("anomalydino");
+const newAlgorithm = ref("comparison");
+const newSizeMode = ref("native");
+const newHeight = ref(448);
+const newWidth = ref(448);
 const newSize = ref(448);
 const newRotation = ref(false);
-const thresholdDraft = ref("");
-const resultId = ref("");
-const view = ref("overlay");
-const filter = ref("all");
 let timer;
 let stopped = false;
 let refreshSequence = 0;
@@ -53,42 +51,6 @@ const running = computed(() =>
 );
 const disabled = computed(() => busy.value || running.value);
 const results = computed(() => current.value?.results || []);
-const effectiveThreshold = computed(() =>
-  thresholdDraft.value === "" ? null : Number(thresholdDraft.value),
-);
-const validThreshold = computed(
-  () =>
-    effectiveThreshold.value === null ||
-    (Number.isFinite(effectiveThreshold.value) &&
-      effectiveThreshold.value >= 0),
-);
-const thresholdChanged = computed(
-  () => effectiveThreshold.value !== current.value?.threshold,
-);
-const scored = computed(() =>
-  results.value.filter((item) => Number.isFinite(item.score)),
-);
-const defectCount = computed(
-  () => scored.value.filter((item) => classification(item) === "defect").length,
-);
-const filteredResults = computed(() =>
-  results.value.filter(
-    (item) => filter.value === "all" || classification(item) === filter.value,
-  ),
-);
-const selectedResult = computed(
-  () =>
-    filteredResults.value.find((item) => item.id === resultId.value) ||
-    filteredResults.value[0],
-);
-const sliderMax = computed(() =>
-  Math.max(
-    0.1,
-    ...scored.value.map((item) => item.score * 1.2),
-    current.value?.threshold || 0,
-    Number(thresholdDraft.value) || 0,
-  ),
-);
 const statusText = {
   idle: "待处理",
   queued: "排队中",
@@ -97,32 +59,9 @@ const statusText = {
   failed: "处理失败",
 };
 
-function classification(item) {
-  // 原始图像分数达到阈值即判为缺陷；未设置或输入无效时不作结论。
-  if (item.error) return "error";
-  if (effectiveThreshold.value === null || !validThreshold.value)
-    return "unset";
-  return item.score >= effectiveThreshold.value ? "defect" : "normal";
-}
-
-function label(item) {
-  // 将内部判定状态映射成中文标签。
-  return { defect: "缺陷", normal: "正常", unset: "未判定", error: "检测失败" }[
-    classification(item)
-  ];
-}
-
-function scoreText(score) {
-  // 同时保留很小和很大的原始分数，避免显示为错误的零。
-  return Number.isFinite(score) ? Number(score).toPrecision(5) : "—";
-}
-
 function selectTask(task) {
   // 切换任务时恢复该任务保存的阈值，不沿用另一任务的分数尺度。
   selectedId.value = task.id;
-  thresholdDraft.value = task.threshold ?? "";
-  resultId.value = "";
-  filter.value = "all";
   stage.value = task.results.length
     ? "results"
     : task.model_ready
@@ -174,7 +113,12 @@ function createTask() {
       body: JSON.stringify({
         name: newName.value,
         algorithm: newAlgorithm.value,
-        image_size: Number(newSize.value),
+        image_size:
+          newSizeMode.value === "native"
+            ? null
+            : newSizeMode.value === "rectangle"
+              ? [Number(newHeight.value), Number(newWidth.value)]
+              : Number(newSize.value),
         rotation: newRotation.value,
       }),
     });
@@ -182,6 +126,14 @@ function createTask() {
     selectTask(task);
     modal.value.close();
   });
+}
+
+function algorithmName(algorithm) {
+  return {
+    comparison: "双模型对比",
+    anomalydino: "AnomalyDINO",
+    subspacead: "SubspaceAD",
+  }[algorithm];
 }
 
 function changeAlgorithm() {
@@ -226,17 +178,12 @@ function start(operation) {
   });
 }
 
-function saveThreshold() {
-  // 只持久化判定阈值，不修改热力图或重跑检测。
-  if (!validThreshold.value) return;
+function compareCurrent() {
   const id = selectedId.value;
-  const threshold = effectiveThreshold.value;
   perform(async () => {
-    await request(`/tasks/${id}/threshold`, {
-      method: "PATCH",
-      body: JSON.stringify({ threshold }),
-    });
-    notice.value = "阈值已保存";
+    const task = await request(`/tasks/${id}/comparison`, { method: "POST" });
+    tasks.value.unshift(task);
+    selectTask(task);
   });
 }
 
@@ -311,10 +258,8 @@ onUnmounted(() => {
           <FolderOpen :size="19" /><span class="task-info"
             ><strong>{{ task.name }}</strong
             ><small
-              >{{
-                task.algorithm === "anomalydino" ? "AnomalyDINO" : "SubspaceAD"
-              }}
-              · {{ task.normal.length }} 张正常样本</small
+              >{{ algorithmName(task.algorithm) }} ·
+              {{ task.normal.length }} 张正常样本</small
             ></span
           ><LoaderCircle
             v-if="['queued', 'running'].includes(task.job.state)"
@@ -357,12 +302,14 @@ onUnmounted(() => {
               <p class="eyebrow">图像异常检测</p>
               <h1>{{ current.name }}</h1>
               <p>
-                {{
-                  current.algorithm === "anomalydino"
-                    ? "AnomalyDINO"
-                    : "SubspaceAD"
+                {{ algorithmName(current.algorithm)
                 }}<span class="separator">/</span
-                >{{ current.image_size }} px<span class="separator">/</span
+                >{{
+                  Array.isArray(current.image_size)
+                    ? current.image_size.join(" × ")
+                    : (current.image_size ?? "原图")
+                }}
+                px<span class="separator">/</span
                 >{{ current.normal.length }} 张正常样本
               </p>
             </div>
@@ -375,6 +322,19 @@ onUnmounted(() => {
             >
               <Trash2 :size="19" />
             </button>
+          </div>
+          <div
+            v-if="current.algorithm !== 'comparison'"
+            class="comparison-entry"
+          >
+            <button
+              class="button secondary"
+              :disabled="disabled"
+              @click="compareCurrent"
+            >
+              用当前图片创建双模型对比
+            </button>
+            <span>复用正常样本、待测图片与标注，分别建库检测。</span>
           </div>
           <div class="steps" aria-label="操作步骤">
             <button
@@ -473,15 +433,17 @@ onUnmounted(() => {
               </div>
               <div>
                 <Layers3 :size="22" /><strong>{{
-                  current.algorithm === "anomalydino"
-                    ? "AnomalyDINO"
-                    : "SubspaceAD"
+                  algorithmName(current.algorithm)
                 }}</strong
                 ><span>检测算法</span>
               </div>
               <div>
                 <ScanLine :size="22" /><strong
-                  >{{ current.image_size }}<small>px</small></strong
+                  >{{
+                    Array.isArray(current.image_size)
+                      ? current.image_size.join(" × ")
+                      : (current.image_size ?? "原图")
+                  }}<small>px</small></strong
                 ><span>输入尺寸</span>
               </div>
             </div>
@@ -512,8 +474,12 @@ onUnmounted(() => {
               </p>
               <p
                 v-if="
-                  algorithms.find((item) => item.id === current.algorithm)
-                    ?.ready === false
+                  algorithms.some(
+                    (item) =>
+                      (current.algorithm === 'comparison' ||
+                        item.id === current.algorithm) &&
+                      !item.ready,
+                  )
                 "
                 class="resource-note"
               >
@@ -575,173 +541,11 @@ onUnmounted(() => {
                 @remove="removeImage('test', $event)"
               />
             </section>
-            <section class="panel results-panel">
-              <div class="section-heading">
-                <div>
-                  <h2>检测结果</h2>
-                  <p>原始异常分数越高，表示与正常样本差异越大。</p>
-                </div>
-                <span class="quiet-tag">{{ scored.length }} 张已完成</span>
-              </div>
-              <div class="threshold-bar">
-                <div class="threshold-title">
-                  <SlidersHorizontal :size="20" />
-                  <div>
-                    <strong>图像判定阈值</strong
-                    ><small>分数 ≥ 阈值时判为缺陷</small>
-                  </div>
-                </div>
-                <div class="threshold-controls">
-                  <input
-                    aria-label="拖动调整图像阈值"
-                    type="range"
-                    min="0"
-                    :max="sliderMax"
-                    :step="sliderMax / 1000"
-                    :value="effectiveThreshold ?? 0"
-                    @input="thresholdDraft = $event.target.value"
-                  /><input
-                    aria-label="图像判定阈值"
-                    class="threshold-number"
-                    type="number"
-                    min="0"
-                    step="any"
-                    placeholder="未设置"
-                    v-model="thresholdDraft"
-                  /><button
-                    class="button secondary"
-                    :disabled="busy || !validThreshold || !thresholdChanged"
-                    @click="saveThreshold"
-                  >
-                    保存阈值</button
-                  ><button
-                    class="text-button"
-                    :disabled="busy"
-                    @click="thresholdDraft = ''"
-                  >
-                    清空
-                  </button>
-                </div>
-              </div>
-              <p class="threshold-note" :class="{ invalid: !validThreshold }">
-                {{
-                  !validThreshold
-                    ? "请输入大于或等于 0 的有限数值。"
-                    : thresholdChanged
-                      ? "当前是阈值预览，点击“保存阈值”后保留。"
-                      : "请结合正常与缺陷样本设置阈值。异常分数不是概率，不同任务的阈值不通用。"
-                }}
-              </p>
-              <div v-if="!results.length" class="result-empty">
-                <ScanLine :size="32" />
-                <h3>检测结果将在这里显示</h3>
-                <p>完成建库并提交待测图片后，可查看分数、热力图与叠加图。</p>
-              </div>
-              <template v-else>
-                <div class="results-toolbar">
-                  <div class="filter-tabs" aria-label="结果筛选">
-                    <button
-                      :class="{ active: filter === 'all' }"
-                      @click="filter = 'all'"
-                    >
-                      全部 {{ results.length }}</button
-                    ><button
-                      :class="{ active: filter === 'defect' }"
-                      @click="filter = 'defect'"
-                    >
-                      缺陷 {{ defectCount }}
-                    </button>
-                  </div>
-                  <span>判定随阈值实时更新</span>
-                </div>
-                <div class="result-workspace">
-                  <div class="result-list">
-                    <button
-                      v-for="item in filteredResults"
-                      :key="item.id"
-                      :class="{ active: selectedResult?.id === item.id }"
-                      @click="resultId = item.id"
-                    >
-                      <img
-                        :src="item.original"
-                        :alt="item.name"
-                        loading="lazy"
-                      /><span
-                        ><strong>{{ item.name }}</strong
-                        ><small>分数 {{ scoreText(item.score) }}</small></span
-                      ><em class="badge" :class="classification(item)">{{
-                        label(item)
-                      }}</em>
-                    </button>
-                    <p v-if="!filteredResults.length" class="nav-empty">
-                      当前阈值下没有缺陷图片
-                    </p>
-                  </div>
-                  <div v-if="selectedResult" class="result-detail">
-                    <div class="detail-heading">
-                      <strong :title="selectedResult.name">{{
-                        selectedResult.name
-                      }}</strong
-                      ><span
-                        class="badge"
-                        :class="classification(selectedResult)"
-                        >{{ label(selectedResult) }}</span
-                      >
-                    </div>
-                    <div class="view-tabs" aria-label="图片视图">
-                      <button
-                        v-for="option in [
-                          { id: 'original', title: '原图' },
-                          { id: 'heatmap', title: '热力图' },
-                          { id: 'overlay', title: '叠加图' },
-                        ]"
-                        :key="option.id"
-                        :class="{ active: view === option.id }"
-                        @click="view = option.id"
-                        :disabled="
-                          !!selectedResult.error && option.id !== 'original'
-                        "
-                      >
-                        {{ option.title }}
-                      </button>
-                    </div>
-                    <div class="image-viewer">
-                      <img
-                        :src="
-                          selectedResult.error
-                            ? selectedResult.original
-                            : selectedResult[view]
-                        "
-                        :alt="`${selectedResult.name} · ${view === 'original' ? '原图' : view === 'heatmap' ? '热力图' : '叠加图'}`"
-                      />
-                    </div>
-                    <p v-if="selectedResult.error" class="inline-note invalid">
-                      {{ selectedResult.error }}
-                    </p>
-                    <div class="detail-footer">
-                      <span
-                        >异常分数
-                        <strong>{{
-                          scoreText(selectedResult.score)
-                        }}</strong></span
-                      ><a
-                        :href="
-                          selectedResult.error
-                            ? selectedResult.original
-                            : selectedResult[view]
-                        "
-                        :download="`${selectedResult.id}-${view}.png`"
-                        class="text-button"
-                        ><Download :size="16" />下载图片</a
-                      >
-                    </div>
-                    <p class="color-note">
-                      热力图颜色按单张图片拉伸，仅展示异常分布；调整图像阈值不会改变热力图。
-                    </p>
-                  </div>
-                </div>
-              </template>
-            </section>
+            <ResultsPanel
+              :key="current.id"
+              :task="current"
+              @refresh="refresh"
+            />
           </template>
         </template>
         <section v-else class="welcome panel">
@@ -792,6 +596,9 @@ onUnmounted(() => {
             v-model.trim="newName" /></label
         ><label
           >检测算法<select v-model="newAlgorithm" @change="changeAlgorithm">
+            <option value="comparison">
+              AnomalyDINO + SubspaceAD 同数据对比
+            </option>
             <option value="anomalydino">AnomalyDINO</option>
             <option value="subspacead">SubspaceAD</option>
           </select></label
@@ -802,13 +609,45 @@ onUnmounted(() => {
         <details>
           <summary>高级设置</summary>
           <label
-            >输入尺寸<select v-model="newSize">
-              <option :value="224">224 px</option>
-              <option :value="448">448 px</option>
-              <option :value="672">672 px</option>
-              <option :value="896">896 px</option>
+            >输入尺寸<select v-model="newSizeMode" aria-label="输入尺寸">
+              <option value="native">保留原图尺寸</option>
+              <option value="short">指定短边</option>
+              <option value="rectangle">指定高 × 宽</option>
             </select></label
-          ><label class="checkbox-label"
+          >
+          <label v-if="newSizeMode === 'short'"
+            >短边（px）<input
+              type="number"
+              min="1"
+              step="1"
+              required
+              v-model="newSize"
+          /></label>
+          <div v-if="newSizeMode === 'rectangle'" class="size-inputs">
+            <label
+              >高（px）<input
+                type="number"
+                min="1"
+                step="1"
+                required
+                v-model="newHeight"
+                aria-label="高（px）"
+            /></label>
+            <label
+              >宽（px）<input
+                type="number"
+                min="1"
+                step="1"
+                required
+                v-model="newWidth"
+                aria-label="宽（px）"
+            /></label>
+          </div>
+          <p class="form-hint">
+            高宽分别向上补齐至 14 的倍数，例如 12 × 12 → 14 ×
+            14；结果恢复原图尺寸。两个模型使用相同输入尺寸与旋转增强。
+          </p>
+          <label class="checkbox-label"
             ><input
               type="checkbox"
               v-model="newRotation"

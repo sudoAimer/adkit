@@ -12,6 +12,7 @@ import torch
 from transformers import AutoImageProcessor, AutoModel
 
 from .base import BaseDetector
+from .data import pad_to_patch
 
 
 def file_sha256(path):
@@ -144,8 +145,7 @@ class SubspaceADDetector(BaseDetector):
         """提取冻结骨干的 patch 特征，保持算法对应的特征协议。"""
         if batch.ndim != 4 or batch.shape[1] != 3 or len(batch)==0:
             raise ValueError('Expected nonempty [B,3,H,W] image batch')
-        if batch.shape[-2]%self.patch_size or batch.shape[-1]%self.patch_size:
-            raise ValueError('Input dimensions must be divisible by patch size')
+        batch = pad_to_patch(batch, self.patch_size)
         outputs = self.encoder(pixel_values=batch.to(self.device,dtype=torch.float32),
                                output_hidden_states=True,output_attentions=False)
         drop = 1+getattr(self.encoder.config,'num_register_tokens',0)
@@ -173,10 +173,13 @@ class SubspaceADDetector(BaseDetector):
         """基于已建立的参考状态返回 CPU 异常分数和异常图。"""
         if self.pca_state is None:
             raise RuntimeError('PCA state is empty; call fit or load first')
+        original_shape = batch.shape[-2:]
+        batch = pad_to_patch(batch, self.patch_size)
         features = self.extract_features(batch)
         grid = (batch.shape[-2]//self.patch_size,batch.shape[-1]//self.patch_size)
         patches = reconstruction_scores(features.reshape(-1,features.shape[-1]).cpu().numpy(),self.pca_state).reshape(len(batch),*grid)
         maps = np.stack([subspace_map(p,batch.shape[-2:]) for p in patches])
+        maps = maps[:, :original_shape[0], :original_shape[1]]
         flat = maps.reshape(len(batch),-1)
         k = max(1,int(flat.shape[1]*.01))
         scores = np.partition(flat,flat.shape[1]-k,axis=1)[:,-k:].mean(1)

@@ -24,25 +24,74 @@ def read_rgb(path):
         return np.array(image.convert('RGB'))
 
 
-def prepare(image, image_size=448, patch_size=14, processor=None):
-    """根据算法处理器缩放归一化图像，并满足 patch 尺寸要求。"""
-    if image_size < patch_size:
-        raise ValueError("image_size must be at least one patch")
-    if processor is not None:
-        if image_size % patch_size:
-            raise ValueError('SubspaceAD image_size must be divisible by patch_size')
-        return processor(images=[Image.fromarray(image)],return_tensors='pt',do_resize=True,
-                         size={'height':image_size,'width':image_size},do_center_crop=False,
-                         crop_size={'height':image_size,'width':image_size}).pixel_values[0]
-    transform = transforms.Compose([
-        transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC, antialias=True),
-        transforms.ToTensor(),
-        transforms.Normalize((.485, .456, .406), (.229, .224, .225)),
-    ])
-    tensor = transform(Image.fromarray(image))
+def pad_to_patch(tensor, patch_size=14):
+    """Pad the bottom/right by edge replication; supports CHW and BCHW."""
+    if tensor.ndim not in (3, 4) or type(patch_size) is not int or patch_size < 1 or min(tensor.shape[-2:]) < 1:
+        raise ValueError('Image and patch dimensions must be positive')
     h, w = tensor.shape[-2:]
-    # Official DINO wrapper removes only the bottom/right remainder.
-    return tensor[:, :h-h % patch_size, :w-w % patch_size]
+    if h % patch_size == 0 and w % patch_size == 0:
+        return tensor
+    return torch.nn.functional.pad(tensor, (0, -w % patch_size, 0, -h % patch_size), mode='replicate')
+
+
+def prepare(image, image_size=448, patch_size=14, processor=None,
+            alignment='pad', return_geometry=False):
+    """Accept native size (None), short edge (int), or explicit (height, width).
+
+    New preprocessing retains all pixels and pads up to a patch boundary.
+    alignment='legacy' is reserved for historical official reproduction.
+    """
+    if alignment not in {'pad', 'legacy'}:
+        raise ValueError('Unknown preprocessing alignment')
+    original = image.shape[:2]
+    pil = Image.fromarray(image)
+    if image_size is not None:
+        if isinstance(image_size, (tuple, list)):
+            if len(image_size) != 2 or any(type(v) is not int or v < 1 for v in image_size):
+                raise ValueError('Expected positive (height, width)')
+            target = list(image_size)
+        elif type(image_size) is int and image_size > 0:
+            target = image_size
+        else:
+            raise ValueError('image_size must be positive, (height, width), or None')
+        if alignment == 'legacy' and processor is not None:
+            if not isinstance(target, int) or target < patch_size or target % patch_size:
+                raise ValueError('Legacy SubspaceAD size must be divisible by patch_size')
+            tensor = processor(images=[pil], return_tensors='pt', do_resize=True,
+                               size={'height': target, 'width': target}, do_center_crop=False,
+                               crop_size={'height': target, 'width': target}).pixel_values[0]
+            geometry = {'original': original, 'resized': (target, target),
+                        'padded': tuple(tensor.shape[-2:]), 'alignment': alignment}
+            return (tensor, geometry) if return_geometry else tensor
+        pil = transforms.Resize(target, interpolation=transforms.InterpolationMode.BICUBIC,
+                                antialias=True)(pil)
+    h, w = pil.height, pil.width
+    if processor is not None:
+        tensor = processor(images=[pil], return_tensors='pt', do_resize=False,
+                           do_center_crop=False, input_data_format='channels_last').pixel_values[0]
+    else:
+        tensor = transforms.Normalize((.485, .456, .406), (.229, .224, .225))(
+            transforms.ToTensor()(pil))
+    if alignment == 'legacy':
+        if min(h, w) < patch_size:
+            raise ValueError('image_size must be at least one patch')
+        tensor = tensor[:, :h-h % patch_size, :w-w % patch_size]
+    else:
+        tensor = pad_to_patch(tensor, patch_size)
+    geometry = {'original': original, 'resized': (h, w), 'padded': tuple(tensor.shape[-2:]),
+                'alignment': alignment}
+    return (tensor, geometry) if return_geometry else tensor
+
+
+def restore_map(amap, geometry):
+    """Remove padding before mapping predictions back to original coordinates."""
+    ph, pw = geometry['padded']
+    amap = cv2.resize(np.asarray(amap, dtype=np.float32), (pw, ph), interpolation=cv2.INTER_LINEAR)
+    if geometry['alignment'] != 'legacy':
+        h, w = geometry['resized']
+        amap = amap[:h, :w]
+    h, w = geometry['original']
+    return cv2.resize(amap, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
 def augment(image, rotation):
@@ -74,7 +123,8 @@ def reference_batches(paths, config, batch_size=1, processor=None):
         else:
             images = augment(read_rgb(path), config.get('rotation', False))
         for image in images:
-            tensor = prepare(image, config.get('image_size', 448), processor=processor)
+            tensor = prepare(image, config.get('image_size', 448), processor=processor,
+                             alignment=config.get('alignment', 'pad'))
             if pending and pending[0].shape != tensor.shape:
                 yield torch.stack(pending)
                 pending = []

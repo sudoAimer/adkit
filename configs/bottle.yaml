@@ -11,6 +11,7 @@ model:
   sigma: 4.0
   positional_encoding: official
 data:
+  alignment: legacy # historical official preprocessing
   format: mvtec
   root: datasets/mvtec-ad
   category: bottle
