@@ -14,10 +14,11 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .engine import DetectorEngine
-from .schemas import TaskCreate, ThresholdUpdate, LabelUpdate
+from .schemas import TaskCreate, ThresholdUpdate, LabelUpdate, ModelSelection
 from .service import TaskService
 from .store import TaskStore
 from .assessment import assess, task_algorithms
+from .registry import MODEL_REGISTRY
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 20 * 1024 * 1024
@@ -27,11 +28,9 @@ MAX_PIXELS = 12_000_000
 def create_app() -> FastAPI:
     """读取服务器环境变量，模型权重仅在实际作业启动时加载。"""
     store = TaskStore(Path(os.getenv("ADKIT_DATA_DIR", str(ROOT / "web-data"))))
-    weights = {
-        "anomalydino": Path(os.getenv("ADKIT_ANOMALYDINO_WEIGHTS", str(ROOT / "weights/dinov2_vits14/model.safetensors"))),
-        "subspacead": Path(os.getenv("ADKIT_SUBSPACEAD_WEIGHTS", str(ROOT / "weights/dinov2_with_registers_giant"))),
-    }
-    engine = DetectorEngine(weights, os.getenv("ADKIT_DEVICE", "cuda"))
+    registry = dict(MODEL_REGISTRY)
+    weights = {id: spec.weights(ROOT) for id, spec in registry.items()}
+    engine = DetectorEngine(weights, os.getenv("ADKIT_DEVICE", "cuda"), registry)
     service = TaskService(store, engine)
 
     @asynccontextmanager
@@ -45,11 +44,8 @@ def create_app() -> FastAPI:
     @app.get("/api/settings")
     def settings():
         """返回算法资源准备状态，不向网页暴露服务器绝对路径。"""
-        return {"algorithms": [
-            {"id": "anomalydino", "label": "AnomalyDINO", "ready": weights["anomalydino"].is_file()},
-            {"id": "subspacead", "label": "SubspaceAD", "ready": all((weights["subspacead"] / f).is_file()
-                for f in ["model.safetensors", "config.json", "preprocessor_config.json"])},
-        ]}
+        return {"algorithms": [{"id": id, "label": spec.label, "ready": spec.available(weights[id])}
+                                for id, spec in registry.items()]}
 
     @app.get("/api/tasks")
     def list_tasks():
@@ -61,28 +57,9 @@ def create_app() -> FastAPI:
         """创建可持续补充样本的检测任务。"""
         return service.create(body.model_dump())
 
-    @app.post('/api/tasks/{task_id}/comparison', status_code=201)
-    def create_comparison(task_id: str):
-        """Copy an idle task's images and labels into an independent paired run."""
-        with store.lock:
-            source = store.idle(task_id)
-            task = service.create(dict(name=(source['name'][:54] + ' · 对比'),
-                algorithm='comparison', image_size=source['image_size'], rotation=source['rotation']))
-            destination = store.directory(task['id'])
-            try:
-                (destination / 'images').mkdir()
-                for kind in ['normal', 'test']:
-                    for original in source[kind]:
-                        item = dict(original)
-                        shutil.copy2(store.directory(task_id) / 'images' / item['file'],
-                                     destination / 'images' / item['file'])
-                        item['url'] = f"/api/tasks/{task['id']}/files/images/{item['file']}"
-                        task[kind].append(item)
-                task['source_task_id'] = task_id
-                return store.save(task)
-            except Exception:
-                shutil.rmtree(destination)
-                raise
+    @app.patch('/api/tasks/{task_id}/models')
+    def add_models(task_id: str, body: ModelSelection):
+        return service.add_models(task_id, body.algorithms)
 
     @app.get("/api/tasks/{task_id}")
     def get_task(task_id: str):
@@ -101,20 +78,18 @@ def create_app() -> FastAPI:
         """仅保存图像判定阈值，已有分数与热力图无需重新计算。"""
         with store.lock:
             task = store.read(task_id)
-            algorithm = body.algorithm or task['algorithm']
+            algorithm = body.algorithm or (task['algorithms'][0] if len(task['algorithms']) == 1 else None)
             if algorithm not in task_algorithms(task):
                 raise HTTPException(400, '请选择此任务中的模型')
             task.setdefault('thresholds', {})[algorithm] = {
                 'threshold': body.threshold, 'area_threshold': body.area_threshold}
-            if task['algorithm'] != 'comparison':
-                task.update(threshold=body.threshold, area_threshold=body.area_threshold)
             return store.save(task)
 
     @app.post('/api/tasks/{task_id}/assessment')
     def assessment(task_id: str, body: ThresholdUpdate):
         with store.lock:
             task = store.read(task_id)
-            algorithm = body.algorithm or task['algorithm']
+            algorithm = body.algorithm or (task['algorithms'][0] if len(task['algorithms']) == 1 else None)
             if algorithm not in task_algorithms(task):
                 raise HTTPException(400, '请选择此任务中的模型')
             return assess(task, store.directory(task_id), algorithm, body.threshold, body.area_threshold)
@@ -127,6 +102,7 @@ def create_app() -> FastAPI:
             if item is None:
                 raise HTTPException(404, '图片不存在')
             item['label'] = body.label
+            task['label_revision'] += 1
             return store.save(task)
 
     @app.post("/api/tasks/{task_id}/images/{kind}", status_code=201)
@@ -192,9 +168,9 @@ def create_app() -> FastAPI:
             return saved
 
     @app.post("/api/tasks/{task_id}/jobs/{operation}", status_code=202)
-    def submit(task_id: str, operation: Literal["fit", "predict"]):
+    def submit(task_id: str, operation: Literal["fit", "predict"], body: ModelSelection):
         """提交串行后台作业，立即返回排队状态供页面轮询。"""
-        return service.submit(task_id, operation)
+        return service.submit(task_id, operation, body.algorithms)
 
     @app.get("/api/tasks/{task_id}/files/{folder}/{filename}")
     def image_file(task_id: str, folder: Literal["images", "results"], filename: str):

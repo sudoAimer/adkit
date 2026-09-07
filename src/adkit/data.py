@@ -106,7 +106,7 @@ def augment(image, rotation):
                                  flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_DEFAULT)
 
 
-def reference_batches(paths, config, batch_size=1, processor=None):
+def reference_batches(paths, config, batch_size=1, processor=None, patch_size=14):
     """根据数据配置生成参考批次，尺寸不同时提前结束当前批次。"""
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
@@ -123,7 +123,7 @@ def reference_batches(paths, config, batch_size=1, processor=None):
         else:
             images = augment(read_rgb(path), config.get('rotation', False))
         for image in images:
-            tensor = prepare(image, config.get('image_size', 448), processor=processor,
+            tensor = prepare(image, config.get('image_size', 448), patch_size=patch_size, processor=processor,
                              alignment=config.get('alignment', 'pad'))
             if pending and pending[0].shape != tensor.shape:
                 yield torch.stack(pending)
@@ -138,9 +138,9 @@ def reference_batches(paths, config, batch_size=1, processor=None):
 
 class ReferenceBatches:
     """Re-iterable batches for two-pass PCA; augmentations regenerate per pass."""
-    def __init__(self, paths, config, batch_size=1, processor=None):
+    def __init__(self, paths, config, batch_size=1, processor=None, patch_size=14):
         """保存路径、数据配置和批大小，延迟到遍历时读取图像。"""
-        self.args = paths, config, batch_size, processor
+        self.args = paths, config, batch_size, processor, patch_size
 
     def __iter__(self):
         """每次遍历重新生成批次，使两遍 PCA 能重新采样增强。"""

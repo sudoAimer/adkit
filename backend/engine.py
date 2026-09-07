@@ -7,43 +7,33 @@ from pathlib import Path
 class DetectorEngine:
     """每次作业独立加载骨干，结束时释放显存，避免多任务占满 GPU。"""
 
-    def __init__(self, weights: dict[str, Path], device: str):
+    def __init__(self, weights: dict[str, Path], device: str, registry=None):
         """记录服务器配置的本地权重路径和计算设备。"""
+        from .registry import MODEL_REGISTRY
+        self.registry = dict(MODEL_REGISTRY if registry is None else registry)
         self.weights = weights
         self.device = device
 
-    def execute(self, task: dict, directory: Path, operation: str, progress) -> dict:
-        """在后台线程执行模型作业，完成或失败均释放当前模型资源。"""
+    def execute(self, task, directory, operation, progress, algorithm):
+        """One model per call; the service isolates failures and schedules selection."""
         import torch
-        from adkit import create_detector, load_detector
-
-        from .assessment import task_algorithms
-
-        algorithms = task_algorithms(task)
-        for algorithm_index, algorithm in enumerate(algorithms):
-            model = None
-            checkpoint = directory / (f'model_{algorithm}.pt' if len(algorithms) > 1 else 'model.pt')
-            def report(**changes):
-                if 'completed' in changes:
-                    changes['completed'] += algorithm_index * len(task['test'])
-                if 'message' in changes:
-                    changes['message'] = f"{algorithm}: {changes['message']}"
-                progress(**changes)
-            try:
-                report(message='正在加载本地模型…')
-                if operation == 'fit':
-                    model = create_detector(algorithm, weights=self.weights[algorithm], device=self.device)
-                    self.fit(model, task, directory, report, checkpoint)
-                else:
-                    model = load_detector(algorithm, checkpoint, device=self.device,
-                                          weights=self.weights[algorithm])
-                    self.predict(model, task, directory, report, algorithm)
-            finally:
-                del model
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-        return {'model_ready': True} if operation == 'fit' else {}
+        spec = self.registry[algorithm]
+        checkpoint = directory / task['models'][algorithm]['checkpoint']
+        model = None
+        try:
+            progress(message='正在加载本地模型…')
+            if operation == 'fit':
+                model = spec.build(self.weights[algorithm], self.device,
+                                   task["models"][algorithm].get("parameters"))
+                self.fit(model, task, directory, progress, checkpoint)
+            else:
+                model = spec.restore(checkpoint, self.weights[algorithm], self.device)
+                self.predict(model, task, directory, progress, algorithm)
+        finally:
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def fit(self, model, task: dict, directory: Path, progress, checkpoint=None) -> None:
         """用全部正常图片建库；SubspaceAD 保留可重复迭代的两遍统计。"""
@@ -51,7 +41,8 @@ class DetectorEngine:
 
         paths = [directory / "images" / item["file"] for item in task["normal"]]
         data = {"image_size": task["image_size"], "rotation": task["rotation"], "alignment": task.get("alignment", "legacy")}
-        batches = ReferenceBatches(paths, data, processor=getattr(model, "processor", None))
+        batches = ReferenceBatches(paths, data, processor=getattr(model, "processor", None),
+                                   patch_size=getattr(model, "patch_size", 1))
         progress(message=f"正在使用 {len(paths)} 张正常图片建立参考库…")
         model.fit(batches)
         model.metadata = {"image_size": task["image_size"], "normal_ids": [item["id"] for item in task["normal"]]}
@@ -71,7 +62,7 @@ class DetectorEngine:
             result = {"id": item["id"], "name": item["name"], "original": item["url"], "algorithm": algorithm}
             try:
                 rgb = read_rgb(directory / "images" / item["file"])
-                batch, geometry = prepare(rgb, task["image_size"], model.patch_size,
+                batch, geometry = prepare(rgb, task["image_size"], getattr(model, "patch_size", 1),
                                 processor=getattr(model, "processor", None),
                                 alignment=task.get("alignment", "legacy"), return_geometry=True)
                 batch = batch.unsqueeze(0)
@@ -79,13 +70,13 @@ class DetectorEngine:
                 score = float(prediction["pred_score"][0])
                 if not math.isfinite(score):
                     raise ValueError("模型返回了非有限分数")
-                if "patch_map" in prediction:
+                if geometry["alignment"] != "legacy":
+                    amap = restore_map(prediction["anomaly_map"][0, 0].numpy(), geometry)
+                elif "patch_map" in prediction:
                     amap = render_map(prediction["patch_map"][0, 0].numpy(), rgb.shape[:2], model.sigma)
                 else:
                     amap = cv2.resize(prediction["anomaly_map"][0, 0].numpy(),
                                       (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
-                if geometry["alignment"] != "legacy":
-                    amap = restore_map(prediction["anomaly_map"][0, 0].numpy(), geometry)
                 if not np.isfinite(amap).all():
                     raise ValueError("模型返回了无效异常图")
                 raw_name = f"{item['id']}_{algorithm}.npy"

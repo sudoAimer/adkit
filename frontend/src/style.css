@@ -1346,3 +1346,55 @@ progress {
   font-size: 12px;
   color: var(--muted);
 }
+
+.model-runner {
+  margin-bottom: 24px;
+}
+.model-picker {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  border: 0;
+  padding: 0;
+  margin: 14px 0;
+}
+.model-choice {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.model-choice input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--blue);
+}
+.model-choice small {
+  color: var(--muted);
+}
+.model-batch-actions,
+.display-models .button-row {
+  flex-wrap: wrap;
+}
+.display-models {
+  margin: 18px 0;
+}
+.display-models > strong {
+  font-size: 14px;
+}
+.run-history {
+  white-space: normal;
+  min-width: 220px;
+  max-width: 420px;
+  padding-left: 16px;
+  font-size: 12px;
+}
+.threshold-editor .view-tabs {
+  flex-wrap: wrap;
+}
+.model-image-grid.paired {
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}

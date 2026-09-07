@@ -1,29 +1,44 @@
 <script setup>
 import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { request } from "../api";
-const props = defineProps({ task: { type: Object, required: true } });
+const props = defineProps({
+  task: { type: Object, required: true },
+  catalog: { type: Array, default: () => [] },
+});
 const emit = defineEmits(["refresh"]);
+const allModels = computed(() => props.task.algorithms);
+const shown = ref([...allModels.value]);
 const models = computed(() =>
-  props.task.algorithm === "comparison"
-    ? ["anomalydino", "subspacead"]
-    : [props.task.algorithm],
+  allModels.value.filter((id) => shown.value.includes(id)),
 );
-const names = { anomalydino: "AnomalyDINO", subspacead: "SubspaceAD" };
-const active = ref(models.value[0]);
-const drafts = reactive(
+const names = computed(() =>
   Object.fromEntries(
-    models.value.map((model) => {
-      const saved = props.task.thresholds?.[model] || props.task;
-      return [
-        model,
-        {
-          threshold: saved.threshold ?? "",
-          area_threshold: saved.area_threshold ?? 0,
-        },
-      ];
-    }),
+    allModels.value.map((id) => [
+      id,
+      props.catalog.find((m) => m.id === id)?.label || id,
+    ]),
   ),
 );
+const active = ref(models.value[0]);
+const drafts = reactive({});
+watch(
+  allModels,
+  (ids) => {
+    for (const id of ids) {
+      if (!drafts[id]) {
+        const saved = props.task.thresholds?.[id] || {};
+        drafts[id] = {
+          threshold: saved.threshold ?? "",
+          area_threshold: saved.area_threshold ?? 0,
+        };
+      }
+    }
+  },
+  { immediate: true },
+);
+watch(models, (ids) => {
+  if (!ids.includes(active.value)) active.value = ids[0];
+});
 const reports = ref({}),
   error = ref(""),
   notice = ref(""),
@@ -35,15 +50,20 @@ const selectedId = ref(""),
 let timeout,
   controller,
   sequence = 0;
-const draft = computed(() => drafts[active.value]);
+const draft = computed(
+  () => drafts[active.value] || { threshold: "", area_threshold: 0 },
+);
 const successful = computed(() =>
-  props.task.results.filter((r) => Number.isFinite(r.score)),
+  props.task.results.filter(
+    (r) =>
+      Number.isFinite(r.score) && r.data_revision === props.task.data_revision,
+  ),
 );
 const scoreMax = computed(() =>
   Math.max(
     0.1,
     ...successful.value
-      .filter((r) => (r.algorithm || props.task.algorithm) === active.value)
+      .filter((r) => r.algorithm === active.value)
       .map((r) => r.score * 1.25),
     props.task.thresholds?.[active.value]?.threshold ||
       props.task.threshold ||
@@ -61,6 +81,7 @@ const areaMax = computed(() =>
 );
 const valid = (model) => {
   const d = drafts[model];
+  if (!d) return false;
   return (
     (d.threshold === "" ||
       (Number.isFinite(Number(d.threshold)) && Number(d.threshold) >= 0)) &&
@@ -76,7 +97,8 @@ const payload = (model) => ({
   area_threshold: Number(drafts[model].area_threshold),
 });
 const changed = computed(() => {
-  const saved = props.task.thresholds?.[active.value] || props.task;
+  if (!active.value) return false;
+  const saved = props.task.thresholds?.[active.value] || {};
   return (
     payload(active.value).threshold !== (saved.threshold ?? null) ||
     Number(draft.value.area_threshold) !== (saved.area_threshold ?? 0)
@@ -84,7 +106,10 @@ const changed = computed(() => {
 });
 function resultFor(id, model) {
   return props.task.results.find(
-    (r) => r.id === id && (r.algorithm || props.task.algorithm) === model,
+    (r) =>
+      r.id === id &&
+      r.algorithm === model &&
+      r.data_revision === props.task.data_revision,
   );
 }
 function decision(id, model) {
@@ -154,6 +179,8 @@ function schedule() {
 watch(
   () =>
     JSON.stringify([
+      models.value,
+      props.task.data_revision,
       props.task.results,
       props.task.test.map((i) => [i.id, i.label]),
       drafts,
@@ -203,289 +230,314 @@ async function setLabel(value) {
     <div class="section-heading">
       <div>
         <h2>
-          {{ models.length > 1 ? "同批数据 · 模型对比" : "缺陷检出结果" }}
+          {{ models.length > 1 ? "同批数据 · 多模型对比" : "缺陷检出结果" }}
         </h2>
         <p>
-          误报、漏检与检出按已标注图片统计；两个模型共享正常样本、待测图片与标注。
+          误报、漏检与检出按已标注图片统计；所有模型共享正常样本、待测图片与标注。
         </p>
       </div>
       <span class="quiet-tag">{{ task.test.length }} 张待测图片</span>
     </div>
-    <div class="assessment-table-wrap">
-      <table
-        class="assessment-table"
-        aria-label="当前阈值下的检出统计"
-        :aria-busy="updating"
-      >
-        <thead>
-          <tr>
-            <th>模型</th>
-            <th>尺寸阈值（px²）</th>
-            <th>分数阈值</th>
-            <th>误报 FP</th>
-            <th>漏检 FN</th>
-            <th>检出 TP</th>
-            <th>正确正常 TN</th>
-            <th>未标注</th>
-            <th>未判定／失败／待测</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
+    <div class="display-models">
+      <strong>选择展示结果（不触发建库或测试）</strong>
+      <div class="model-picker" aria-label="展示模型选择">
+        <label v-for="id in allModels" :key="id" class="model-choice"
+          ><input type="checkbox" :value="id" v-model="shown" />{{
+            names[id]
+          }}</label
+        >
+      </div>
+      <div class="button-row">
+        <button class="text-button" @click="shown = [...allModels]">
+          展示全部</button
+        ><button class="text-button" @click="shown = []">清空展示</button>
+      </div>
+    </div>
+    <p v-if="!models.length" class="inline-note">请选择要展示的模型。</p>
+    <template v-if="models.length">
+      <div class="assessment-table-wrap">
+        <table
+          class="assessment-table"
+          aria-label="当前阈值下的检出统计"
+          :aria-busy="updating"
+        >
+          <thead>
+            <tr>
+              <th>模型</th>
+              <th>尺寸阈值（px²）</th>
+              <th>分数阈值</th>
+              <th>误报 FP</th>
+              <th>漏检 FN</th>
+              <th>检出 TP</th>
+              <th>正确正常 TN</th>
+              <th>未标注</th>
+              <th>未判定／失败／待测</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="model in models"
+              :key="model"
+              :class="{ 'active-row': model === active }"
+              @click="active = model"
+            >
+              <th>
+                <button class="text-button" @click="active = model">
+                  {{ names[model] }}
+                </button>
+              </th>
+              <td>{{ drafts[model].area_threshold }}</td>
+              <td>
+                {{
+                  drafts[model].threshold === ""
+                    ? "未设置"
+                    : text(Number(drafts[model].threshold))
+                }}
+              </td>
+              <td>{{ count(model, "false_positive") }}</td>
+              <td>{{ count(model, "false_negative") }}</td>
+              <td>{{ count(model, "detected") }}</td>
+              <td>{{ count(model, "true_negative") }}</td>
+              <td>{{ count(model, "unlabelled") }}</td>
+              <td>
+                {{ count(model, "unset") }} / {{ count(model, "failed") }} /
+                {{ count(model, "pending") }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="threshold-editor">
+        <div
+          class="view-tabs"
+          v-if="models.length > 1"
+          aria-label="选择要调整阈值的模型"
+        >
+          <button
             v-for="model in models"
             :key="model"
-            :class="{ 'active-row': model === active }"
+            :class="{ active: active === model }"
+            @click="active = model"
           >
-            <th>{{ names[model] }}</th>
-            <td>{{ drafts[model].area_threshold }}</td>
-            <td>
-              {{
-                drafts[model].threshold === ""
-                  ? "未设置"
-                  : text(Number(drafts[model].threshold))
-              }}
-            </td>
-            <td>{{ count(model, "false_positive") }}</td>
-            <td>{{ count(model, "false_negative") }}</td>
-            <td>{{ count(model, "detected") }}</td>
-            <td>{{ count(model, "true_negative") }}</td>
-            <td>{{ count(model, "unlabelled") }}</td>
-            <td>
-              {{ count(model, "unset") }} / {{ count(model, "failed") }} /
-              {{ count(model, "pending") }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="threshold-editor">
-      <div
-        class="view-tabs"
-        v-if="models.length > 1"
-        aria-label="选择要调整阈值的模型"
-      >
-        <button
-          v-for="model in models"
-          :key="model"
-          :class="{ active: active === model }"
-          @click="active = model"
-        >
-          {{ names[model] }} 阈值
-        </button>
-      </div>
-      <label class="threshold-slider-row"
-        ><span
-          ><strong>尺寸阈值</strong
-          ><small>最小连通缺陷面积 · 原图像素（px²）</small></span
-        ><input
-          type="range"
-          min="0"
-          :max="areaMax"
-          step="1"
-          v-model.number="draft.area_threshold"
-          aria-label="拖动调整尺寸阈值" /><input
-          type="number"
-          min="0"
-          step="1"
-          v-model="draft.area_threshold"
-          aria-label="尺寸阈值像素面积"
-      /></label>
-      <label class="threshold-slider-row"
-        ><span
-          ><strong>分数阈值</strong><small>原始异常分数，非概率</small></span
-        ><input
-          type="range"
-          min="0"
-          :max="scoreMax"
-          :step="scoreMax / 2000"
-          :value="draft.threshold || 0"
-          @input="draft.threshold = $event.target.value"
-          aria-label="拖动调整分数阈值" /><input
-          type="number"
-          min="0"
-          step="any"
-          v-model="draft.threshold"
-          placeholder="未设置"
-          aria-label="分数阈值"
-      /></label>
-      <div class="threshold-actions">
-        <span>{{
-          updating
-            ? "正在更新统计…"
-            : changed
-              ? "当前为阈值预览"
-              : "使用已保存阈值"
-        }}</span
-        ><button
-          class="button secondary"
-          :disabled="saving || !valid(active) || !changed"
-          @click="save"
-        >
-          保存 {{ names[active] }} 阈值</button
-        ><button
-          class="text-button"
-          @click="
-            draft.threshold = '';
-            draft.area_threshold = 0;
-          "
-        >
-          清空阈值
-        </button>
-      </div>
-      <p class="threshold-note">
-        尺寸为 0 时仅按图像分数判定。尺寸大于 0
-        时，图像分数须达到分数阈值，且异常图中达到该分数阈值的最大 8
-        连通区域须达到面积阈值。不同模型的分数尺度不同，请分别校准。
-      </p>
-      <p v-if="!valid(active)" class="inline-note invalid">
-        分数须为非负有限数，尺寸须为非负整数。
-      </p>
-      <p v-if="error" class="inline-note invalid" role="alert">{{ error }}</p>
-      <p v-if="notice" class="inline-note" role="status">{{ notice }}</p>
-      <p v-if="!updating && reports[active]" class="threshold-note">
-        误报率 {{ percent(reports[active].false_positive_rate) }} · 漏检率
-        {{ percent(reports[active].miss_rate) }} · 检出率
-        {{
-          percent(reports[active].recall)
-        }}。分母为相应已标注且已判定的正常／缺陷图片；无样本显示 —。
-      </p>
-    </div>
-    <div class="results-toolbar">
-      <div class="filter-tabs">
-        <button
-          v-for="option in [
-            { id: 'all', name: '全部' },
-            { id: 'defect', name: '缺陷' },
-            { id: 'normal', name: '正常' },
-          ]"
-          :key="option.id"
-          :class="{ active: filter === option.id }"
-          @click="filter = option.id"
-        >
-          {{ option.name }}
-        </button>
-      </div>
-      <span>按 {{ names[active] }} 当前阈值筛选</span>
-    </div>
-    <div v-if="!task.test.length" class="result-empty">
-      <h3>等待上传待测图片</h3>
-      <p>检测后可对比同一图片的分数与异常分布。</p>
-    </div>
-    <div v-else class="result-workspace comparison-workspace">
-      <div class="result-list">
-        <button
-          v-for="item in visible"
-          :key="item.id"
-          :class="{ active: selected?.id === item.id }"
-          @click="selectedId = item.id"
-        >
-          <img :src="item.url" :alt="item.name" loading="lazy" /><span
-            ><strong>{{ item.name }}</strong
-            ><small
-              >实际：{{
-                item.label === "normal"
-                  ? "正常"
-                  : item.label === "defect"
-                    ? "缺陷"
-                    : "未标注"
-              }}</small
-            ></span
-          ><em class="badge" :class="decision(item.id, active)">{{
-            labels[decision(item.id, active)]
-          }}</em>
-        </button>
-        <p v-if="!visible.length" class="nav-empty">当前筛选下没有图片</p>
-      </div>
-      <div v-if="selected" class="result-detail">
-        <div class="detail-heading">
-          <strong>{{ selected.name }}</strong
-          ><label class="truth-label"
-            >实际标注<select
-              :value="selected.label || ''"
-              :disabled="saving"
-              @change="setLabel($event.target.value)"
-            >
-              <option value="">未标注</option>
-              <option value="normal">正常</option>
-              <option value="defect">缺陷</option>
-            </select></label
-          >
+            {{ names[model] }} 阈值
+          </button>
         </div>
-        <div class="view-tabs" aria-label="图片视图">
+        <label class="threshold-slider-row"
+          ><span
+            ><strong>尺寸阈值</strong
+            ><small>最小连通缺陷面积 · 原图像素（px²）</small></span
+          ><input
+            type="range"
+            min="0"
+            :max="areaMax"
+            step="1"
+            v-model.number="draft.area_threshold"
+            aria-label="拖动调整尺寸阈值" /><input
+            type="number"
+            min="0"
+            step="1"
+            v-model="draft.area_threshold"
+            aria-label="尺寸阈值像素面积"
+        /></label>
+        <label class="threshold-slider-row"
+          ><span
+            ><strong>分数阈值</strong><small>原始异常分数，非概率</small></span
+          ><input
+            type="range"
+            min="0"
+            :max="scoreMax"
+            :step="scoreMax / 2000"
+            :value="draft.threshold || 0"
+            @input="draft.threshold = $event.target.value"
+            aria-label="拖动调整分数阈值" /><input
+            type="number"
+            min="0"
+            step="any"
+            v-model="draft.threshold"
+            placeholder="未设置"
+            aria-label="分数阈值"
+        /></label>
+        <div class="threshold-actions">
+          <span>{{
+            updating
+              ? "正在更新统计…"
+              : changed
+                ? "当前为阈值预览"
+                : "使用已保存阈值"
+          }}</span
+          ><button
+            class="button secondary"
+            :disabled="saving || !valid(active) || !changed"
+            @click="save"
+          >
+            保存 {{ names[active] }} 阈值</button
+          ><button
+            class="text-button"
+            @click="
+              draft.threshold = '';
+              draft.area_threshold = 0;
+            "
+          >
+            清空阈值
+          </button>
+        </div>
+        <p class="threshold-note">
+          尺寸为 0 时仅按图像分数判定。尺寸大于 0
+          时，图像分数须达到分数阈值，且异常图中达到该分数阈值的最大 8
+          连通区域须达到面积阈值。不同模型的分数尺度不同，请分别校准。
+        </p>
+        <p v-if="!valid(active)" class="inline-note invalid">
+          分数须为非负有限数，尺寸须为非负整数。
+        </p>
+        <p v-if="error" class="inline-note invalid" role="alert">{{ error }}</p>
+        <p v-if="notice" class="inline-note" role="status">{{ notice }}</p>
+        <p v-if="!updating && reports[active]" class="threshold-note">
+          误报率 {{ percent(reports[active].false_positive_rate) }} · 漏检率
+          {{ percent(reports[active].miss_rate) }} · 检出率
+          {{
+            percent(reports[active].recall)
+          }}。分母为相应已标注且已判定的正常／缺陷图片；无样本显示 —。
+        </p>
+      </div>
+      <div class="results-toolbar">
+        <div class="filter-tabs">
           <button
             v-for="option in [
-              { id: 'original', name: '原图' },
-              { id: 'heatmap', name: '热力图' },
-              { id: 'overlay', name: '叠加图' },
+              { id: 'all', name: '全部' },
+              { id: 'defect', name: '缺陷' },
+              { id: 'normal', name: '正常' },
             ]"
             :key="option.id"
-            :class="{ active: view === option.id }"
-            @click="view = option.id"
+            :class="{ active: filter === option.id }"
+            @click="filter = option.id"
           >
             {{ option.name }}
           </button>
         </div>
-        <div class="model-image-grid" :class="{ paired: models.length > 1 }">
-          <article v-for="model in models" :key="model">
-            <div class="detail-heading">
-              <strong>{{ names[model] }}</strong
-              ><span class="badge" :class="decision(selected.id, model)">{{
-                labels[decision(selected.id, model)]
-              }}</span>
-            </div>
-            <div class="image-viewer">
-              <img
-                :src="
-                  view === 'original'
-                    ? selected.url
-                    : resultFor(selected.id, model)?.[view] || selected.url
-                "
-                :alt="`${selected.name} · ${names[model]} · ${view}`"
-              />
-            </div>
-            <p
-              v-if="resultFor(selected.id, model)?.error"
-              class="inline-note invalid"
-            >
-              {{ resultFor(selected.id, model).error }}
-            </p>
-            <p v-else-if="!resultFor(selected.id, model)" class="inline-note">
-              等待该模型检测，当前显示原图。
-            </p>
-            <div class="detail-footer">
-              <span
-                >分数
-                <strong>{{
-                  text(resultFor(selected.id, model)?.score)
-                }}</strong></span
-              ><a
-                v-if="
-                  resultFor(selected.id, model)?.[view] || view === 'original'
-                "
-                :href="
-                  view === 'original'
-                    ? selected.url
-                    : resultFor(selected.id, model)?.[view]
-                "
-                download
-                class="text-button"
-                >下载图片</a
-              >
-            </div>
-            <p
-              v-if="
-                reports[model]?.rows.find((r) => r.id === selected.id)?.reason
-              "
-              class="inline-note"
-            >
-              {{ reports[model].rows.find((r) => r.id === selected.id).reason }}
-            </p>
-          </article>
-        </div>
-        <p class="color-note">
-          热力图按单张图片拉伸显示，颜色不可跨模型比较；判定使用原始分数。标注同步用于两个模型的统计，调整阈值无需重跑模型。
-        </p>
+        <span>按 {{ names[active] }} 当前阈值筛选</span>
       </div>
-    </div>
+      <div v-if="!task.test.length" class="result-empty">
+        <h3>等待上传待测图片</h3>
+        <p>检测后可对比同一图片的分数与异常分布。</p>
+      </div>
+      <div v-else class="result-workspace comparison-workspace">
+        <div class="result-list">
+          <button
+            v-for="item in visible"
+            :key="item.id"
+            :class="{ active: selected?.id === item.id }"
+            @click="selectedId = item.id"
+          >
+            <img :src="item.url" :alt="item.name" loading="lazy" /><span
+              ><strong>{{ item.name }}</strong
+              ><small
+                >实际：{{
+                  item.label === "normal"
+                    ? "正常"
+                    : item.label === "defect"
+                      ? "缺陷"
+                      : "未标注"
+                }}</small
+              ></span
+            ><em class="badge" :class="decision(item.id, active)">{{
+              labels[decision(item.id, active)]
+            }}</em>
+          </button>
+          <p v-if="!visible.length" class="nav-empty">当前筛选下没有图片</p>
+        </div>
+        <div v-if="selected" class="result-detail">
+          <div class="detail-heading">
+            <strong>{{ selected.name }}</strong
+            ><label class="truth-label"
+              >实际标注<select
+                :value="selected.label || ''"
+                :disabled="saving"
+                @change="setLabel($event.target.value)"
+              >
+                <option value="">未标注</option>
+                <option value="normal">正常</option>
+                <option value="defect">缺陷</option>
+              </select></label
+            >
+          </div>
+          <div class="view-tabs" aria-label="图片视图">
+            <button
+              v-for="option in [
+                { id: 'original', name: '原图' },
+                { id: 'heatmap', name: '热力图' },
+                { id: 'overlay', name: '叠加图' },
+              ]"
+              :key="option.id"
+              :class="{ active: view === option.id }"
+              @click="view = option.id"
+            >
+              {{ option.name }}
+            </button>
+          </div>
+          <div class="model-image-grid" :class="{ paired: models.length > 1 }">
+            <article v-for="model in models" :key="model">
+              <div class="detail-heading">
+                <strong>{{ names[model] }}</strong
+                ><span class="badge" :class="decision(selected.id, model)">{{
+                  labels[decision(selected.id, model)]
+                }}</span>
+              </div>
+              <div class="image-viewer">
+                <img
+                  :src="
+                    view === 'original'
+                      ? selected.url
+                      : resultFor(selected.id, model)?.[view] || selected.url
+                  "
+                  :alt="`${selected.name} · ${names[model]} · ${view}`"
+                />
+              </div>
+              <p
+                v-if="resultFor(selected.id, model)?.error"
+                class="inline-note invalid"
+              >
+                {{ resultFor(selected.id, model).error }}
+              </p>
+              <p v-else-if="!resultFor(selected.id, model)" class="inline-note">
+                等待该模型检测，当前显示原图。
+              </p>
+              <div class="detail-footer">
+                <span
+                  >分数
+                  <strong>{{
+                    text(resultFor(selected.id, model)?.score)
+                  }}</strong></span
+                ><a
+                  v-if="
+                    resultFor(selected.id, model)?.[view] || view === 'original'
+                  "
+                  :href="
+                    view === 'original'
+                      ? selected.url
+                      : resultFor(selected.id, model)?.[view]
+                  "
+                  download
+                  class="text-button"
+                  >下载图片</a
+                >
+              </div>
+              <p
+                v-if="
+                  reports[model]?.rows.find((r) => r.id === selected.id)?.reason
+                "
+                class="inline-note"
+              >
+                {{
+                  reports[model].rows.find((r) => r.id === selected.id).reason
+                }}
+              </p>
+            </article>
+          </div>
+          <p class="color-note">
+            热力图按单张图片拉伸显示，颜色不可跨模型比较；判定使用原始分数。标注同步用于所有模型的统计，调整阈值无需重跑模型。
+          </p>
+        </div>
+      </div>
+    </template>
   </section>
 </template>
