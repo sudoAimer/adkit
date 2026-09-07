@@ -1,6 +1,6 @@
 # adkit
 
-轻量、离线运行的 Python 异常检测库。目前实现 AnomalyDINO 和 SubspaceAD；通过 YAML 选择算法、模型参数和数据，无 Lightning/FastAPI 依赖。
+轻量、离线运行的 Python 异常检测库。目前实现 AnomalyDINO 和 SubspaceAD；通过 YAML 选择算法、模型参数和数据，核心算法无 Lightning 依赖；FastAPI 仅在安装 `web` 可选依赖时引入。
 
 ## 安装与运行
 
@@ -128,3 +128,9 @@ conda run --no-capture-output -n detect python tools/compare_subspace_official.p
 YAML 是命令行实验入口；`samples`、`ReferenceBatches` 继续接收数据配置。
 检查点加载以保存的算法参数为准，仅覆盖 `device` 和 `weights`；修改算法参数应重新构造并建库。
 旧包导入和旧检查点需要迁移或重新生成。
+
+## 图像检测工作台
+
+现提供 Vue 3 + FastAPI 单人工作台：正常图片上传 → 在线建库 → 批量检测 → 原始分数、热力图与叠加图。页面采用中文白蓝主题，支持手动调整并保存图像判定阈值，任务及图片持久化在后端机器。
+
+完整安装、权重配置、开发与启动方式见 [工作台说明](backend/README.md)。项目版本保持 `0.1.0`。
