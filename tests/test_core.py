@@ -41,7 +41,7 @@ def test_official_reference_selection():
 def test_non_square_geometry():
     """检查非正方形图像的预处理和异常图坐标。"""
     image = np.zeros((101, 157, 3), dtype=np.uint8)
-    tensor = prepare(image, 56)
+    tensor = prepare(image, 56, alignment='legacy')
     assert tensor.shape == (3, 56, 84)
     patch = np.zeros((4, 6), dtype=np.float32)
     patch[1, 4] = 1

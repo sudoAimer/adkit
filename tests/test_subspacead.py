@@ -80,7 +80,7 @@ def test_tiny_offline_subspace_roundtrip(tmp_path):
     with patch('socket.create_connection',side_effect=AssertionError('Unexpected network')):
         model = create_detector(**options)
         image = np.random.default_rng(2).integers(0,256,size=(35,51,3),dtype=np.uint8)
-        tensor = prepare(image,28,processor=model.processor).unsqueeze(0)
+        tensor = prepare(image,28,processor=model.processor,alignment='legacy').unsqueeze(0)
         assert tensor.shape == (1,3,28,28)
         with pytest.raises(RuntimeError,match='empty'):
             model.predict(tensor)
@@ -90,6 +90,9 @@ def test_tiny_offline_subspace_roundtrip(tmp_path):
         result = model.predict(tensor)
         assert result['anomaly_map'].shape == (1,1,28,28)
         assert torch.isfinite(result['anomaly_map']).all()
+        arbitrary = model.predict(torch.randn(1, 3, 13, 29))
+        assert arbitrary['anomaly_map'].shape == (1, 1, 13, 29)
+        assert torch.isfinite(arbitrary['anomaly_map']).all()
         model.save(tmp_path/'model.pt')
         saved = torch.load(tmp_path/'model.pt',weights_only=True)
         assert 'memory_bank' not in saved and 'encoder' not in saved

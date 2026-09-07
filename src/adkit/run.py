@@ -16,7 +16,7 @@ import yaml
 
 from .factory import create_detector, load_detector
 from .anomalydino import render_map
-from .data import samples, select_reference, ReferenceBatches, read_rgb, prepare
+from .data import samples, select_reference, ReferenceBatches, read_rgb, prepare, restore_map
 from .metrics import evaluate
 
 
@@ -66,6 +66,8 @@ def run(config):
             saved_data = model.metadata.get('data', {})
             if saved_data.get('image_size') != data.get('image_size', 448):
                 raise ValueError("Inference image_size differs from saved reference preprocessing")
+            if saved_data.get('alignment', 'legacy') != data.get('alignment', 'pad'):
+                raise ValueError('Inference alignment differs from saved reference preprocessing')
             selected = model.metadata.get('reference_samples', [])
             fit_seconds = 0.
         else:
@@ -94,8 +96,10 @@ def run(config):
         rows, maps, masks = [], [], []
         for i, sample in enumerate(tests):
             rgb = read_rgb(sample['path'])
-            tensor = prepare(rgb, data.get('image_size', 448), model.patch_size,
-                             processor=getattr(model,'processor',None)).unsqueeze(0)
+            tensor, geometry = prepare(rgb, data.get('image_size', 448), model.patch_size,
+                             processor=getattr(model,'processor',None),
+                             alignment=data.get('alignment', 'pad'), return_geometry=True)
+            tensor = tensor.unsqueeze(0)
             synchronize(model.device)
             start = time.perf_counter()
             prediction = model.predict(tensor)
@@ -107,6 +111,8 @@ def run(config):
             input_map = prediction['anomaly_map'][0,0].numpy()
             amap = render_map(patch, rgb.shape[:2], model.sigma) if patch is not None else cv2.resize(
                 input_map,(rgb.shape[1],rgb.shape[0]),interpolation=cv2.INTER_LINEAR)
+            if geometry['alignment'] != 'legacy':
+                amap = restore_map(input_map, geometry)
             score = float(prediction['pred_score'][0])
             rows.append({'key': sample['key'], 'path': sample['path'], 'label': sample['label'],
                          'score': score, 'seconds': seconds})
@@ -131,6 +137,9 @@ def run(config):
                     with Image.open(sample['mask']) as image:
                         mask = np.array(image.convert('L')) > 0
                 evaluation_map = input_map if config.get('evaluation',{}).get('resolution')=='input' else amap
+                if config.get('evaluation',{}).get('resolution') == 'input' and geometry['alignment'] != 'legacy':
+                    h, w = geometry['resized']
+                    evaluation_map = evaluation_map[:h, :w]
                 if mask.shape != evaluation_map.shape:
                     mask = np.array(Image.fromarray(mask.astype(np.uint8)).resize(
                         (evaluation_map.shape[1],evaluation_map.shape[0]),Image.Resampling.NEAREST))>0

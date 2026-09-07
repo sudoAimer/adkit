@@ -3,6 +3,7 @@ model:
   weights: weights/dinov2_with_registers_giant
   device: cuda
 data:
+  alignment: legacy # historical official preprocessing
   format: folder
   test_path: datasets/mvtec-ad/bottle/test/broken_large/000.png
   image_size: 672

@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .store import TaskStore
+from .assessment import task_algorithms
 
 
 class TaskService:
@@ -22,7 +23,7 @@ class TaskService:
     def create(self, values: dict) -> dict:
         """创建空任务，阈值初始为空，避免将未经校准的值作为判定依据。"""
         task = dict(values, id=uuid4().hex, created_at=datetime.now(timezone.utc).isoformat(),
-                    threshold=None, normal=[], test=[], results=[], model_ready=False,
+                    threshold=None, area_threshold=0, thresholds={}, alignment='pad', normal=[], test=[], results=[], model_ready=False,
                     job={"state": "idle", "operation": None, "message": "等待上传正常图片", "completed": 0, "total": 0})
         return self.store.save(task)
 
@@ -34,6 +35,8 @@ class TaskService:
         if normal_changed:
             task["model_ready"] = False
             (directory / "model.pt").unlink(missing_ok=True)
+            for algorithm in task_algorithms(task):
+                (directory / f"model_{algorithm}.pt").unlink(missing_ok=True)
         task["job"] = {"state": "idle", "operation": None, "message": "样本已更新", "completed": 0, "total": 0}
 
     def submit(self, task_id: str, operation: str) -> dict:
@@ -48,7 +51,7 @@ class TaskService:
                 raise HTTPException(400, "请先完成建库并上传待测图片")
             self.invalidate(task, normal_changed=operation == "fit")
             task["job"] = {"state": "queued", "operation": operation, "message": "排队等待处理…",
-                           "completed": 0, "total": len(task["test"]) if operation == "predict" else 0}
+                           "completed": 0, "total": len(task["test"]) * len(task_algorithms(task)) if operation == "predict" else 0}
             snapshot = self.store.save(task)
             self.executor.submit(self.work, task_id, operation)
             return snapshot
