@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 dependencies = ["torch>=2.1", "torchvision", "timm>=1.0", "safetensors", "numpy", "scipy", "scikit-learn", "opencv-python", "Pillow", "PyYAML"]
 
 [project.optional-dependencies]
+# Web 工作台依赖独立安装，核心算法库不强制引入 Web 框架。
+web = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1", "python-multipart>=0.0.20,<1"]
 test = ["pytest"]
 reference = ["faiss-cpu", "matplotlib", "tifffile", "tqdm", "pandas", "kornia"]
 subspacead = ["transformers==4.57.6"]
