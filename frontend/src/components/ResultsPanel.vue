@@ -4,6 +4,7 @@ import { request } from "../api";
 const props = defineProps({
   task: { type: Object, required: true },
   catalog: { type: Array, default: () => [] },
+  mode: { type: String, default: 'adjust' },
 });
 const emit = defineEmits(["refresh"]);
 const allModels = computed(() => props.task.algorithms);
@@ -20,10 +21,12 @@ const names = computed(() =>
   ),
 );
 const active = ref(models.value[0]);
+const imageModels = computed(() => props.mode === 'compare' ? models.value : [active.value].filter(Boolean));
 const drafts = reactive({});
 watch(
   allModels,
   (ids) => {
+    for (const id of ids) if (!drafts[id] && !shown.value.includes(id)) shown.value.push(id);
     for (const id of ids) {
       if (!drafts[id]) {
         const saved = props.task.thresholds?.[id] || {};
@@ -47,6 +50,7 @@ const reports = ref({}),
 const selectedId = ref(""),
   view = ref("overlay"),
   filter = ref("all");
+watch(() => props.mode, () => { filter.value = 'all'; });
 let timeout,
   controller,
   sequence = 0;
@@ -67,15 +71,6 @@ const scoreMax = computed(() =>
       .map((r) => r.score * 1.25),
     props.task.thresholds?.[active.value]?.threshold ||
       props.task.threshold ||
-      0,
-  ),
-);
-const areaMax = computed(() =>
-  Math.max(
-    1,
-    ...successful.value.map((r) => r.pixels || 0),
-    props.task.thresholds?.[active.value]?.area_threshold ||
-      props.task.area_threshold ||
       0,
   ),
 );
@@ -118,6 +113,18 @@ function decision(id, model) {
     : reports.value[model]?.rows.find((r) => r.id === id)?.classification ||
         "unset";
 }
+function imageSource(model) {
+  if (!selected.value) return '';
+  if (view.value === 'original') return selected.value.url;
+  if (['binary', 'filtered'].includes(view.value)) {
+    if (!valid(model) || drafts[model].threshold === '' || !resultFor(selected.value.id, model)?.raw_map) return '';
+    const query = new URLSearchParams({ threshold: drafts[model].threshold,
+      area_threshold: view.value === 'filtered' ? drafts[model].area_threshold : 0,
+      revision: props.task.data_revision });
+    return `/api/tasks/${props.task.id}/binary/${model}/${selected.value.id}?${query}`;
+  }
+  return resultFor(selected.value.id, model)?.[view.value] || '';
+}
 const labels = {
   defect: "缺陷",
   normal: "正常",
@@ -128,6 +135,7 @@ const visible = computed(() =>
   props.task.test.filter(
     (item) =>
       filter.value === "all" ||
+      (filter.value === 'different' && new Set(models.value.map(model => decision(item.id, model)).filter(value => ['normal', 'defect'].includes(value))).size > 1) ||
       decision(item.id, active.value) === filter.value,
   ),
 );
@@ -230,7 +238,7 @@ async function setLabel(value) {
     <div class="section-heading">
       <div>
         <h2>
-          {{ models.length > 1 ? "同批数据 · 多模型对比" : "缺陷检出结果" }}
+          {{ mode === 'compare' ? '对比结果' : '调整判定标准' }}
         </h2>
         <p>
           误报、漏检与检出按已标注图片统计；所有模型共享正常样本、待测图片与标注。
@@ -238,8 +246,8 @@ async function setLabel(value) {
       </div>
       <span class="quiet-tag">{{ task.test.length }} 张待测图片</span>
     </div>
-    <div class="display-models">
-      <strong>选择展示结果（不触发建库或测试）</strong>
+    <div v-if="mode === 'compare'" class="display-models">
+      <strong>参与对比的算法</strong>
       <div class="model-picker" aria-label="展示模型选择">
         <label v-for="id in allModels" :key="id" class="model-choice"
           ><input type="checkbox" :value="id" v-model="shown" />{{
@@ -264,7 +272,7 @@ async function setLabel(value) {
           <thead>
             <tr>
               <th>模型</th>
-              <th>尺寸阈值（px²）</th>
+              <th>最小异常面积（px²）</th>
               <th>分数阈值</th>
               <th>误报 FP</th>
               <th>漏检 FN</th>
@@ -307,7 +315,7 @@ async function setLabel(value) {
           </tbody>
         </table>
       </div>
-      <div class="threshold-editor">
+      <div v-show="mode === 'adjust'" class="threshold-editor">
         <div
           class="view-tabs"
           v-if="models.length > 1"
@@ -324,20 +332,14 @@ async function setLabel(value) {
         </div>
         <label class="threshold-slider-row"
           ><span
-            ><strong>尺寸阈值</strong
+            ><strong>最小异常面积</strong
             ><small>最小连通缺陷面积 · 原图像素（px²）</small></span
           ><input
-            type="range"
-            min="0"
-            :max="areaMax"
-            step="1"
-            v-model.number="draft.area_threshold"
-            aria-label="拖动调整尺寸阈值" /><input
             type="number"
             min="0"
             step="1"
             v-model="draft.area_threshold"
-            aria-label="尺寸阈值像素面积"
+            aria-label="最小异常面积（px²）"
         /></label>
         <label class="threshold-slider-row"
           ><span
@@ -406,6 +408,7 @@ async function setLabel(value) {
               { id: 'all', name: '全部' },
               { id: 'defect', name: '缺陷' },
               { id: 'normal', name: '正常' },
+              ...(mode === 'compare' ? [{ id: 'different', name: '判定不一致' }] : []),
             ]"
             :key="option.id"
             :class="{ active: filter === option.id }"
@@ -466,6 +469,8 @@ async function setLabel(value) {
                 { id: 'original', name: '原图' },
                 { id: 'heatmap', name: '热力图' },
                 { id: 'overlay', name: '叠加图' },
+                { id: 'binary', name: '二值图' },
+                { id: 'filtered', name: '面积筛选后' },
               ]"
               :key="option.id"
               :class="{ active: view === option.id }"
@@ -475,7 +480,7 @@ async function setLabel(value) {
             </button>
           </div>
           <div class="model-image-grid" :class="{ paired: models.length > 1 }">
-            <article v-for="model in models" :key="model">
+            <article v-for="model in imageModels" :key="model">
               <div class="detail-heading">
                 <strong>{{ names[model] }}</strong
                 ><span class="badge" :class="decision(selected.id, model)">{{
@@ -484,13 +489,11 @@ async function setLabel(value) {
               </div>
               <div class="image-viewer">
                 <img
-                  :src="
-                    view === 'original'
-                      ? selected.url
-                      : resultFor(selected.id, model)?.[view] || selected.url
-                  "
+                  v-if="imageSource(model)"
+                  :src="imageSource(model)"
                   :alt="`${selected.name} · ${names[model]} · ${view}`"
                 />
+                <p v-else>暂无此视图。二值图需要有效分数阈值及分析结果。</p>
               </div>
               <p
                 v-if="resultFor(selected.id, model)?.error"
@@ -499,7 +502,7 @@ async function setLabel(value) {
                 {{ resultFor(selected.id, model).error }}
               </p>
               <p v-else-if="!resultFor(selected.id, model)" class="inline-note">
-                等待该模型检测，当前显示原图。
+                等待该模型分析完成。
               </p>
               <div class="detail-footer">
                 <span
@@ -508,14 +511,8 @@ async function setLabel(value) {
                     text(resultFor(selected.id, model)?.score)
                   }}</strong></span
                 ><a
-                  v-if="
-                    resultFor(selected.id, model)?.[view] || view === 'original'
-                  "
-                  :href="
-                    view === 'original'
-                      ? selected.url
-                      : resultFor(selected.id, model)?.[view]
-                  "
+                  v-if="imageSource(model)"
+                  :href="imageSource(model)"
                   download
                   class="text-button"
                   >下载图片</a
@@ -534,6 +531,7 @@ async function setLabel(value) {
             </article>
           </div>
           <p class="color-note">
+            二值图白色表示像素分数 ≥ 当前阈值；面积筛选后仅保留达到最小面积的 8 连通区域。图像级判定还需满足图像分数阈值。
             热力图按单张图片拉伸显示，颜色不可跨模型比较；判定使用原始分数。标注同步用于所有模型的统计，调整阈值无需重跑模型。
           </p>
         </div>

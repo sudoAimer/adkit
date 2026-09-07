@@ -86,6 +86,8 @@ class TaskService:
                 raise HTTPException(429, '等待任务较多，请稍后重试')
             if not task['normal' if operation == 'fit' else 'test']:
                 raise HTTPException(400, '请先上传正常图片' if operation == 'fit' else '请先上传待测图片')
+            if operation == 'analyze' and not task['normal']:
+                raise HTTPException(400, '请先上传正常参考图片')
             self.attach(task, selected)
             for algorithm in selected:
                 task['models'][algorithm].update(state='queued', message='排队等待处理', completed=0,
@@ -125,12 +127,21 @@ class TaskService:
                         (self.store.directory(task_id) / state['checkpoint']).unlink(missing_ok=True)
                     state.update(state='running', message='正在加载模型')
                     self.store.save(task)
-                self.engine.execute(task, self.store.directory(task_id), operation, progress, algorithm)
+                if operation == 'analyze':
+                    if not state['model_ready'] or state['fit_revision'] != task['normal_revision']:
+                        self.engine.execute(task, self.store.directory(task_id), 'fit', progress, algorithm)
+                        with self.store.lock:
+                            task = self.store.read(task_id)
+                            task['models'][algorithm].update(model_ready=True, fit_revision=task['normal_revision'])
+                            self.store.save(task)
+                    self.engine.execute(task, self.store.directory(task_id), 'predict', progress, algorithm)
+                else:
+                    self.engine.execute(task, self.store.directory(task_id), operation, progress, algorithm)
                 with self.store.lock:
                     task = self.store.read(task_id)
                     state = task['models'][algorithm]
                     failed_images = sum(bool(r.get('error')) for r in task['results'] if r['algorithm'] == algorithm)
-                    failed = operation == 'predict' and failed_images == len(task['test'])
+                    failed = operation != 'fit' and failed_images == len(task['test'])
                     failures += int(failed)
                     state.update(state='failed' if failed else 'done', message='建库完成' if operation == 'fit' else f'测试完成，{failed_images} 张失败')
                     if operation == 'fit':

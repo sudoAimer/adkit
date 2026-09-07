@@ -35,7 +35,8 @@ def workspace(tmp_path, monkeypatch):
 def run(client, base, operation, models):
     response = client.post(base+'/jobs/'+operation, json={'algorithms': models})
     assert response.status_code == 202, response.text
-    for _ in range(200):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
         task = client.get(base).json()
         if task['job']['state'] not in ['queued', 'running']:
             return task
@@ -74,6 +75,42 @@ def test_four_models_selection_addition_and_isolated_reruns(workspace):
     task = run(client,base,'predict',['third'])
     assert [r for r in task['results'] if r['algorithm'] != 'third'] == other_results
     assert len(task['results']) == 4  # replacement, never duplicates
+
+
+def test_analyze_prepares_and_reuses_reference(workspace):
+    client, base, root, _ = workspace
+    task = run(client, base, 'analyze', ['anomalydino', 'third'])
+    assert task['job']['state'] == 'done'
+    assert len(task['results']) == 2
+    checkpoint = root / task['id'] / task['models']['anomalydino']['checkpoint']
+    modified = checkpoint.stat().st_mtime_ns
+    task = run(client, base, 'analyze', ['anomalydino'])
+    assert checkpoint.stat().st_mtime_ns == modified
+    assert len(task['results']) == 2
+    client.post(base + '/images/normal', files=[('files', ('b.png', png(), 'image/png'))])
+    task = run(client, base, 'analyze', ['anomalydino'])
+    assert task['models']['anomalydino']['fit_revision'] == task['normal_revision']
+    assert task['job']['state'] == 'done'
+
+
+def test_binary_threshold_and_area(workspace):
+    import io
+    import numpy as np
+    from PIL import Image
+    client, base, root, _ = workspace
+    task = run(client, base, 'analyze', ['anomalydino'])
+    result = task['results'][0]
+    np.save(root / task['id'] / 'results' / result['raw_map'],
+            np.array([[1., 1., 0., 0.], [0., 0., 0., 1.]]))
+    url = base + '/binary/anomalydino/' + result['id']
+    response = client.get(url, params={'threshold': 1})
+    assert response.status_code == 200
+    assert np.count_nonzero(np.array(Image.open(io.BytesIO(response.content)))) == 3
+    response = client.get(url, params={'threshold': 1, 'area_threshold': 2})
+    assert np.count_nonzero(np.array(Image.open(io.BytesIO(response.content)))) == 2
+    assert client.get(url, params={'threshold': -1}).status_code == 422
+    assert client.get(url, params={'threshold': 1, 'area_threshold': -1}).status_code == 422
+    assert client.get(base + '/binary/anomalydino/missing', params={'threshold': 1}).status_code == 404
 
 
 def test_failure_and_unfitted_model_do_not_stop_remaining_models(workspace):

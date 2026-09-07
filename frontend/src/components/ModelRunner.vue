@@ -51,9 +51,9 @@ async function act(operation, ids = selected.value) {
   <section class="panel model-runner">
     <div class="section-heading">
       <div>
-        <h2>选择要执行的模型</h2>
+        <h2>选择算法</h2>
         <p>
-          同一任务共享图片、尺寸与增强；勾选决定本次执行，不影响下方展示选择。
+          使用同一批图片分析，自动准备正常参考并检测验证图片，完成后进入阈值调整。
         </p>
       </div>
       <div class="button-row">
@@ -87,32 +87,18 @@ async function act(operation, ids = selected.value) {
     </div>
     <div class="button-row model-batch-actions">
       <button
-        class="button secondary"
-        :disabled="!canAct || !selected.length"
-        @click="act('add')"
-      >
-        加入任务
-      </button>
-      <button
         class="button primary"
-        :disabled="!canAct || !selected.length || !task.normal.length"
-        @click="act('fit')"
+        :disabled="!canAct || !selected.length || !task.normal.length || !task.test.length"
+        @click="act('analyze')"
       >
-        为所选模型建库（{{ selected.length }}）
-      </button>
-      <button
-        class="button secondary"
-        :disabled="!canAct || !selected.length || !task.test.length"
-        @click="act('predict')"
-      >
-        测试所选模型（{{ selected.length }}）
+        开始分析（{{ selected.length }}）
       </button>
     </div>
     <p class="threshold-note">
-      可随时增选模型。新增模型首次执行时自动加入任务；测试时未建库的模型会单独报错，其他模型继续。
+      请先上传正常参考图片和验证图片。已有参考自动复用；失败后可重新开始分析。
     </p>
     <p v-if="error" class="inline-note invalid" role="alert">{{ error }}</p>
-    <div class="assessment-table-wrap">
+    <details><summary>查看运行详情</summary><div class="assessment-table-wrap">
       <table class="assessment-table" aria-label="各模型运行状态">
         <thead>
           <tr>
@@ -202,11 +188,6 @@ async function act(operation, ids = selected.value) {
           </tr>
         </tbody>
       </table>
-    </div>
-    <p class="threshold-note">
-      当前图片版本 v{{ task.data_revision }} · 正常样本版本 v{{
-        task.normal_revision
-      }}。只重跑所选模型；数据变化会使依赖它的结果失效。
-    </p>
+    </div></details>
   </section>
 </template>

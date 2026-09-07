@@ -1,6 +1,6 @@
 <!-- 单人检测工作台，按正常样本、建库、结果三个阶段组织操作。 -->
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   Activity,
   ArrowRight,
@@ -52,6 +52,9 @@ const running = computed(() =>
 );
 const disabled = computed(() => busy.value || running.value);
 const results = computed(() => current.value?.results || []);
+watch(() => current.value?.job.state, (state, previous) => {
+  if (previous && ['queued', 'running'].includes(previous) && state === 'done' && stage.value === 'fit') stage.value = 'results';
+});
 const statusText = {
   idle: "待处理",
   queued: "排队中",
@@ -301,9 +304,10 @@ onUnmounted(() => {
           <div class="steps" aria-label="操作步骤">
             <button
               v-for="(step, index) in [
-                { id: 'normal', title: '正常样本', sub: '上传无缺陷图片' },
-                { id: 'fit', title: '建立参考库', sub: '从正常样本学习' },
-                { id: 'results', title: '检测与结果', sub: '查看异常分布' },
+                { id: 'normal', title: '上传数据', sub: '正常参考与验证图片' },
+                { id: 'fit', title: '选择算法', sub: '自动准备并分析' },
+                { id: 'results', title: '调整判定标准', sub: '可视化调整独立阈值' },
+                { id: 'compare', title: '对比结果', sub: '查看误报、漏检与差异' },
               ]"
               :key="step.id"
               :class="{ active: stage === step.id }"
@@ -347,12 +351,13 @@ onUnmounted(() => {
           </div>
 
           <ModelRunner
+            v-if="stage === 'fit'"
             :key="current.id"
             :task="current"
             :catalog="algorithms"
             :disabled="disabled"
             @refresh="refresh"
-            @operation="stage = $event === 'fit' ? 'fit' : 'results'"
+            @operation="stage = 'fit'"
           />
           <section v-if="stage === 'normal'" class="panel">
             <div class="section-heading">
@@ -374,41 +379,29 @@ onUnmounted(() => {
               @remove="removeImage('normal', $event)"
             />
             <div class="panel-footer">
-              <p><CircleHelp :size="16" />增删正常图片后，需要重新建库。</p>
+              <p><CircleHelp :size="16" />样本变更后，下次分析会自动更新。</p>
               <button
                 class="button primary"
                 :disabled="!current.normal.length || disabled"
                 @click="stage = 'fit'"
               >
-                下一步：建立参考库<ArrowRight :size="17" />
+                下一步：选择算法<ArrowRight :size="17" />
               </button>
             </div>
           </section>
 
-          <section v-if="stage === 'fit'" class="panel">
-            <h2>为所选模型建立参考库</h2>
-            <p>
-              在上方勾选一个、多个或全部模型，然后点击“为所选模型建库”。各模型独立显示进度，可单独重试。
-            </p>
-            <button class="button secondary" @click="stage = 'results'">
-              上传待测图片并查看结果
-            </button>
-          </section>
 
-          <div v-show="stage === 'results'">
-            <section class="panel">
+          <div>
+            <section v-show="stage === 'normal'" class="panel">
               <div class="section-heading">
                 <div>
                   <h2>
-                    待测图片
+                    验证图片
                     <span class="count">{{ current.test.length }}</span>
                   </h2>
-                  <p>上传需要检查的图片，支持批量检测。</p>
+                  <p>上传用于调整阈值和比较算法的图片，分析后可标记实际正常或缺陷。</p>
                 </div>
               </div>
-              <p v-if="!current.model_ready" class="inline-note">
-                先为所选模型建库，再在上方点击“测试所选模型”。
-              </p>
               <ImageUpload
                 :images="current.test"
                 :disabled="disabled"
@@ -419,11 +412,15 @@ onUnmounted(() => {
               />
             </section>
             <ResultsPanel
+              v-show="stage === 'results' || stage === 'compare'"
               :key="current.id"
+              :mode="stage === 'compare' ? 'compare' : 'adjust'"
               :task="current"
               :catalog="algorithms"
               @refresh="refresh"
             />
+            <button v-if="stage === 'results'" class="button primary" @click="stage = 'compare'">下一步：对比结果</button>
+            <button v-if="stage === 'compare'" class="button secondary" @click="stage = 'results'">返回调整判定标准</button>
           </div>
         </template>
         <section v-else class="welcome panel">
@@ -473,7 +470,7 @@ onUnmounted(() => {
             placeholder="例如：瓶身外观检测"
             v-model.trim="newName"
         /></label>
-        <fieldset class="model-picker">
+        <details><summary>算法预选（也可在第二步修改）</summary><fieldset class="model-picker">
           <legend>选择模型</legend>
           <label
             v-for="model in algorithms"
@@ -501,7 +498,7 @@ onUnmounted(() => {
             清空
           </button>
         </div>
-        <p class="form-hint">
+        </details><p class="form-hint">
           同一任务建议只检测一类物品，保持拍摄角度与光照接近。
         </p>
         <details>

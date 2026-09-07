@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, UploadFile, Query
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -168,9 +168,33 @@ def create_app() -> FastAPI:
             return saved
 
     @app.post("/api/tasks/{task_id}/jobs/{operation}", status_code=202)
-    def submit(task_id: str, operation: Literal["fit", "predict"], body: ModelSelection):
+    def submit(task_id: str, operation: Literal["fit", "predict", "analyze"], body: ModelSelection):
         """提交串行后台作业，立即返回排队状态供页面轮询。"""
         return service.submit(task_id, operation, body.algorithms)
+
+    @app.get('/api/tasks/{task_id}/binary/{algorithm}/{image_id}')
+    def binary(task_id: str, algorithm: str, image_id: str,
+               threshold: float = Query(ge=0, allow_inf_nan=False),
+               area_threshold: int = Query(default=0, ge=0)):
+        import numpy as np
+        import cv2
+        with store.lock:
+            task = store.read(task_id)
+            result = next((r for r in task['results'] if r['id'] == image_id
+                           and r['algorithm'] == algorithm
+                           and r.get('data_revision', 0) == task['data_revision']), None)
+            path = store.directory(task_id) / 'results' / (result.get('raw_map', '') if result else '')
+            if not result or result.get('error') or not path.is_file():
+                raise HTTPException(404, '暂无异常图，请重新分析')
+            mask = (np.load(path, allow_pickle=False) >= threshold).astype(np.uint8)
+        if area_threshold:
+            _, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+            keep = stats[:, cv2.CC_STAT_AREA] >= area_threshold
+            keep[0] = False
+            mask = keep[labels].astype(np.uint8)
+        output = BytesIO()
+        Image.fromarray(mask * 255).save(output, format='PNG')
+        return Response(output.getvalue(), media_type='image/png', headers={'Cache-Control': 'no-store'})
 
     @app.get("/api/tasks/{task_id}/files/{folder}/{filename}")
     def image_file(task_id: str, folder: Literal["images", "results"], filename: str):
