@@ -8,7 +8,7 @@ import numpy as np
 
 
 def task_algorithms(task):
-    return ['anomalydino', 'subspacead'] if task['algorithm'] == 'comparison' else [task['algorithm']]
+    return task['algorithms']
 
 
 @lru_cache(maxsize=2048)
@@ -26,7 +26,7 @@ def assess(task, directory: Path, algorithm, threshold, area_threshold):
                   unlabelled=0, unset=0, failed=0, pending=0, predicted_defect=0)
     rows = []
     for result in task['results']:
-        if result.get('algorithm', task['algorithm']) != algorithm:
+        if result.get('algorithm') != algorithm or result.get('data_revision', 0) != task.get('data_revision', 0):
             continue
         row = {'id': result['id'], 'label': labels.get(result['id']), 'area': None}
         score = result.get('score')

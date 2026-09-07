@@ -19,10 +19,10 @@ from backend.schemas import TaskCreate, ThresholdUpdate
 
 def test_task_size_validation():
     for size in [None, 12, 1025, [12,29]]:
-        assert TaskCreate(name='test', image_size=size)
+        assert TaskCreate(name='test', algorithms=['anomalydino'], image_size=size)
     for size in [0, -1, [3,0], 1.5, True]:
         with pytest.raises(ValidationError):
-            TaskCreate(name='test', image_size=size)
+            TaskCreate(name='test', algorithms=['anomalydino'], image_size=size)
     for value in [-1, float('nan'), float('inf')]:
         with pytest.raises(ValidationError):
             ThresholdUpdate(threshold=value)
@@ -34,7 +34,7 @@ def test_confusion_and_connected_area(tmp_path):
     amap = np.zeros((6,6), dtype=np.float32)
     amap[0,:2] = .5; amap[4,4:] = .5
     np.save(output/'raw.npy', amap)
-    task = {'algorithm':'comparison', 'test':[
+    task = {'algorithms':['anomalydino','subspacead'], 'test':[
         {'id':'fp','label':'normal'}, {'id':'tp','label':'defect'},
         {'id':'fn','label':'defect'}, {'id':'tn','label':'normal'},
         {'id':'unknown'}, {'id':'bad','label':'defect'}, {'id':'pending'}], 'results':[]}
@@ -71,19 +71,21 @@ def test_engine_uses_identical_images_and_separate_artifacts(tmp_path):
     rgb = np.random.default_rng(3).integers(0,256,(12,29,3),dtype=np.uint8)
     Image.fromarray(rgb).save(tmp_path/'images/image.png')
     item = dict(id='image',name='image.png',file='image.png',url='/original')
-    task = dict(id='task',algorithm='comparison',image_size=None,alignment='pad',rotation=True,normal=[item],test=[item])
+    task = dict(id='task',algorithms=['anomalydino','subspacead'],models={id:dict(checkpoint=f'model_{id}.pt') for id in ['anomalydino','subspacead']},image_size=None,alignment='pad',rotation=True,normal=[item],test=[item])
     records, progress = {}, []
     engine = DetectorEngine(dict(anomalydino=tmp_path,subspacead=tmp_path),'cpu')
     with patch('adkit.create_detector', side_effect=lambda name, **kw: FakeDetector(name, records)), patch('adkit.load_detector', side_effect=lambda name, *a, **kw: FakeDetector(name,records)):
-        assert engine.execute(task,tmp_path,'fit',lambda **kw:progress.append(kw)) == {'model_ready':True}
+        for model in task['algorithms']:
+            engine.execute(task,tmp_path,'fit',lambda **kw:progress.append(kw),model)
         assert (tmp_path/'model_anomalydino.pt').is_file() and (tmp_path/'model_subspacead.pt').is_file()
         for first, second in zip(records['anomalydino'],records['subspacead']):
             torch.testing.assert_close(first, second)
         assert len(records['anomalydino']) == len(records['subspacead']) == 8
-        engine.execute(task,tmp_path,'predict',lambda **kw:progress.append(kw))
+        for model in task['algorithms']:
+            engine.execute(task,tmp_path,'predict',lambda **kw:progress.append(kw),model)
     results = [p['result'] for p in progress if 'result' in p]
     assert len(results) == 2 and results[0]['raw_map'] != results[1]['raw_map']
-    assert [p['completed'] for p in progress if 'completed' in p] == [1,2]
+    assert [p['completed'] for p in progress if 'completed' in p] == [1,1]
     for result in results:
         assert np.load(tmp_path/'results'/result['raw_map']).shape == (12,29)
         assert result['input_shape'] == [14,42]
@@ -98,11 +100,11 @@ def test_api_labels_thresholds_jobs_and_invalidation(tmp_path,monkeypatch):
     monkeypatch.setenv('ADKIT_DATA_DIR',str(tmp_path))
     records = {}
     with patch('adkit.create_detector',side_effect=lambda name, **kw:FakeDetector(name,records)), patch('adkit.load_detector',side_effect=lambda name,*a,**kw:FakeDetector(name,records)), TestClient(create_app()) as client:
-        task = client.post('/api/tasks',json={'name':'compare','algorithm':'comparison','image_size':None}).json()
+        task = client.post('/api/tasks',json={'name':'compare','algorithms':['anomalydino','subspacead'],'image_size':None}).json()
         base = f"/api/tasks/{task['id']}"
         def get(): return client.get(base).json()
         def job(operation):
-            response = client.post(base+'/jobs/'+operation)
+            response = client.post(base+'/jobs/'+operation,json={'algorithms':['anomalydino','subspacead']})
             assert response.status_code == 202
             for _ in range(100):
                 if get()['job']['state'] not in ['queued','running']: break
@@ -129,14 +131,6 @@ def test_api_labels_thresholds_jobs_and_invalidation(tmp_path,monkeypatch):
         client.patch(base+f'/images/test/{id}/label',json={'label':'normal'})
         report = client.post(base+'/assessment',json=dict(algorithm='anomalydino',threshold=.4,area_threshold=2)).json()
         assert report['counts']['false_positive'] == 1 and get()['model_ready']
-        # Snapshot reuse keeps IDs/labels but owns separate files and no stale models.
-        clone_response = client.post(base+'/comparison')
-        assert clone_response.status_code == 201
-        clone = clone_response.json()
-        assert clone['algorithm'] == 'comparison' and not clone['model_ready']
-        assert clone['test'][0]['id'] == id and clone['test'][0]['label'] == 'normal'
-        assert clone['test'][0]['url'] != get()['test'][0]['url']
-        assert client.get(clone['test'][0]['url']).status_code == 200
         client.post(base+'/images/normal',files=[('files',('second.png',png(),'image/png'))])
         assert not get()['model_ready'] and not get()['results']
         assert not list((tmp_path/task['id']).glob('model*.pt'))

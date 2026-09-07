@@ -7,6 +7,7 @@ from threading import RLock
 from uuid import uuid4
 
 from fastapi import HTTPException
+from .task_models import normalize
 
 
 class TaskStore:
@@ -18,10 +19,15 @@ class TaskStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = RLock()
         for file in self.root.glob("*/task.json"):
-            task = json.loads(file.read_text(encoding="utf-8"))
+            task = normalize(json.loads(file.read_text(encoding="utf-8")))
             if task["job"]["state"] in {"queued", "running"}:
                 task["job"].update(state="failed", message="服务已重启，请重新执行任务。")
-                self.save(task)
+                for state in task["models"].values():
+                    if state["state"] in {"queued", "running"}:
+                        state.update(state="failed", message="服务已重启，请重试")
+                        if state["history"] and state["history"][-1]["state"] == "running":
+                            state["history"][-1].update(state="failed", error="服务重启")
+            self.save(task)
 
     def directory(self, task_id: str) -> Path:
         """仅允许系统生成的标识符参与路径拼接。"""
@@ -35,11 +41,12 @@ class TaskStore:
             file = self.directory(task_id) / "task.json"
             if not file.is_file():
                 raise HTTPException(404, "任务不存在")
-            return json.loads(file.read_text(encoding="utf-8"))
+            return normalize(json.loads(file.read_text(encoding="utf-8")))
 
     def save(self, task: dict) -> dict:
         """先写临时文件再替换，避免进程中断留下半份 JSON。"""
         with self.lock:
+            task = normalize(task)
             directory = self.directory(task["id"])
             directory.mkdir(parents=True, exist_ok=True)
             temporary = directory / f"{uuid4().hex}.tmp"

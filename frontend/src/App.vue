@@ -19,6 +19,7 @@ import {
   X,
   AlertCircle,
 } from "lucide-vue-next";
+import ModelRunner from "./components/ModelRunner.vue";
 import ResultsPanel from "./components/ResultsPanel.vue";
 import ImageUpload from "./components/ImageUpload.vue";
 import { request, uploadImages } from "./api";
@@ -34,7 +35,7 @@ const busy = ref(false);
 const uploadProgress = ref(null);
 const modal = ref(null);
 const newName = ref("");
-const newAlgorithm = ref("comparison");
+const newAlgorithms = ref([]);
 const newSizeMode = ref("native");
 const newHeight = ref(448);
 const newWidth = ref(448);
@@ -102,6 +103,7 @@ async function perform(action) {
 function openCreate() {
   // 使用原生对话框获得焦点约束和 Escape 关闭支持。
   newName.value = "";
+  newAlgorithms.value = algorithms.value.map((m) => m.id);
   modal.value.showModal();
 }
 
@@ -112,7 +114,7 @@ function createTask() {
       method: "POST",
       body: JSON.stringify({
         name: newName.value,
-        algorithm: newAlgorithm.value,
+        algorithms: newAlgorithms.value,
         image_size:
           newSizeMode.value === "native"
             ? null
@@ -128,17 +130,10 @@ function createTask() {
   });
 }
 
-function algorithmName(algorithm) {
-  return {
-    comparison: "双模型对比",
-    anomalydino: "AnomalyDINO",
-    subspacead: "SubspaceAD",
-  }[algorithm];
-}
-
-function changeAlgorithm() {
-  // 新任务切换算法时使用该算法推荐的默认输入尺寸。
-  newSize.value = newAlgorithm.value === "subspacead" ? 672 : 448;
+function algorithmNames(task) {
+  return task.algorithms
+    .map((id) => algorithms.value.find((m) => m.id === id)?.label || id)
+    .join(" / ");
 }
 
 function upload(kind, files) {
@@ -166,25 +161,6 @@ function removeImage(kind, id) {
   perform(() =>
     request(`/tasks/${taskId}/images/${kind}/${id}`, { method: "DELETE" }),
   );
-}
-
-function start(operation) {
-  // 建库只显示阶段状态；检测按实际完成图片数展示进度。
-  const id = selectedId.value;
-  perform(async () => {
-    await request(`/tasks/${id}/jobs/${operation}`, { method: "POST" });
-    if (id === selectedId.value)
-      stage.value = operation === "fit" ? "fit" : "results";
-  });
-}
-
-function compareCurrent() {
-  const id = selectedId.value;
-  perform(async () => {
-    const task = await request(`/tasks/${id}/comparison`, { method: "POST" });
-    tasks.value.unshift(task);
-    selectTask(task);
-  });
 }
 
 function deleteTask() {
@@ -258,7 +234,7 @@ onUnmounted(() => {
           <FolderOpen :size="19" /><span class="task-info"
             ><strong>{{ task.name }}</strong
             ><small
-              >{{ algorithmName(task.algorithm) }} ·
+              >{{ algorithmNames(task) }} ·
               {{ task.normal.length }} 张正常样本</small
             ></span
           ><LoaderCircle
@@ -302,8 +278,7 @@ onUnmounted(() => {
               <p class="eyebrow">图像异常检测</p>
               <h1>{{ current.name }}</h1>
               <p>
-                {{ algorithmName(current.algorithm)
-                }}<span class="separator">/</span
+                {{ algorithmNames(current) }}<span class="separator">/</span
                 >{{
                   Array.isArray(current.image_size)
                     ? current.image_size.join(" × ")
@@ -322,19 +297,6 @@ onUnmounted(() => {
             >
               <Trash2 :size="19" />
             </button>
-          </div>
-          <div
-            v-if="current.algorithm !== 'comparison'"
-            class="comparison-entry"
-          >
-            <button
-              class="button secondary"
-              :disabled="disabled"
-              @click="compareCurrent"
-            >
-              用当前图片创建双模型对比
-            </button>
-            <span>复用正常样本、待测图片与标注，分别建库检测。</span>
           </div>
           <div class="steps" aria-label="操作步骤">
             <button
@@ -384,6 +346,14 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <ModelRunner
+            :key="current.id"
+            :task="current"
+            :catalog="algorithms"
+            :disabled="disabled"
+            @refresh="refresh"
+            @operation="stage = $event === 'fit' ? 'fit' : 'results'"
+          />
           <section v-if="stage === 'normal'" class="panel">
             <div class="section-heading">
               <div>
@@ -415,99 +385,17 @@ onUnmounted(() => {
             </div>
           </section>
 
-          <section v-if="stage === 'fit'" class="panel fit-panel">
-            <div class="section-heading">
-              <div>
-                <h2>建立正常参考库</h2>
-                <p>模型提取正常样本的特征，作为后续缺陷检测的依据。</p>
-              </div>
-              <span class="quiet-tag" :class="{ ready: current.model_ready }">{{
-                current.model_ready ? "参考库已就绪" : "等待建库"
-              }}</span>
-            </div>
-            <div class="fit-summary">
-              <div>
-                <Image :size="22" /><strong
-                  >{{ current.normal.length }}<small>张</small></strong
-                ><span>正常样本</span>
-              </div>
-              <div>
-                <Layers3 :size="22" /><strong>{{
-                  algorithmName(current.algorithm)
-                }}</strong
-                ><span>检测算法</span>
-              </div>
-              <div>
-                <ScanLine :size="22" /><strong
-                  >{{
-                    Array.isArray(current.image_size)
-                      ? current.image_size.join(" × ")
-                      : (current.image_size ?? "原图")
-                  }}<small>px</small></strong
-                ><span>输入尺寸</span>
-              </div>
-            </div>
-            <div class="fit-status">
-              <span class="fit-status-icon"
-                ><CheckCircle2
-                  v-if="current.model_ready"
-                  :size="36" /><LoaderCircle
-                  v-else-if="running"
-                  :size="36"
-                  class="spin" /><Layers3 v-else :size="36"
-              /></span>
-              <h3>
-                {{
-                  current.model_ready
-                    ? "参考库已准备好"
-                    : running
-                      ? "正在建立参考库"
-                      : "准备开始建库"
-                }}
-              </h3>
-              <p>
-                {{
-                  current.model_ready
-                    ? "上传待测图片，查看模型发现的异常区域。"
-                    : "建库耗时取决于样本数量与设备性能，请耐心等待。"
-                }}
-              </p>
-              <p
-                v-if="
-                  algorithms.some(
-                    (item) =>
-                      (current.algorithm === 'comparison' ||
-                        item.id === current.algorithm) &&
-                      !item.ready,
-                  )
-                "
-                class="resource-note"
-              >
-                服务器尚未准备该算法的本地权重，请先完成配置。
-              </p>
-              <div class="button-row">
-                <button
-                  class="button"
-                  :class="current.model_ready ? 'secondary' : 'primary'"
-                  @click="start('fit')"
-                  :disabled="disabled || !current.normal.length"
-                >
-                  <RefreshCw v-if="current.model_ready" :size="17" /><Layers3
-                    v-else
-                    :size="17"
-                  />{{ current.model_ready ? "重新建库" : "开始建库" }}</button
-                ><button
-                  v-if="current.model_ready"
-                  class="button primary"
-                  @click="stage = 'results'"
-                >
-                  开始检测<ArrowRight :size="17" />
-                </button>
-              </div>
-            </div>
+          <section v-if="stage === 'fit'" class="panel">
+            <h2>为所选模型建立参考库</h2>
+            <p>
+              在上方勾选一个、多个或全部模型，然后点击“为所选模型建库”。各模型独立显示进度，可单独重试。
+            </p>
+            <button class="button secondary" @click="stage = 'results'">
+              上传待测图片并查看结果
+            </button>
           </section>
 
-          <template v-if="stage === 'results'">
+          <div v-show="stage === 'results'">
             <section class="panel">
               <div class="section-heading">
                 <div>
@@ -517,20 +405,9 @@ onUnmounted(() => {
                   </h2>
                   <p>上传需要检查的图片，支持批量检测。</p>
                 </div>
-                <button
-                  class="button primary"
-                  @click="start('predict')"
-                  :disabled="
-                    disabled || !current.model_ready || !current.test.length
-                  "
-                >
-                  <ScanLine :size="17" />{{
-                    results.length ? "重新检测" : "开始检测"
-                  }}
-                </button>
               </div>
               <p v-if="!current.model_ready" class="inline-note">
-                请先完成正常样本建库，再开始检测。
+                先为所选模型建库，再在上方点击“测试所选模型”。
               </p>
               <ImageUpload
                 :images="current.test"
@@ -544,9 +421,10 @@ onUnmounted(() => {
             <ResultsPanel
               :key="current.id"
               :task="current"
+              :catalog="algorithms"
               @refresh="refresh"
             />
-          </template>
+          </div>
         </template>
         <section v-else class="welcome panel">
           <div class="welcome-symbol"><ScanLine :size="40" /></div>
@@ -593,16 +471,36 @@ onUnmounted(() => {
             required
             maxlength="60"
             placeholder="例如：瓶身外观检测"
-            v-model.trim="newName" /></label
-        ><label
-          >检测算法<select v-model="newAlgorithm" @change="changeAlgorithm">
-            <option value="comparison">
-              AnomalyDINO + SubspaceAD 同数据对比
-            </option>
-            <option value="anomalydino">AnomalyDINO</option>
-            <option value="subspacead">SubspaceAD</option>
-          </select></label
-        >
+            v-model.trim="newName"
+        /></label>
+        <fieldset class="model-picker">
+          <legend>选择模型</legend>
+          <label
+            v-for="model in algorithms"
+            :key="model.id"
+            class="model-choice"
+            ><input
+              type="checkbox"
+              :value="model.id"
+              v-model="newAlgorithms"
+            />{{ model.label }}</label
+          >
+        </fieldset>
+        <div class="button-row">
+          <button
+            type="button"
+            class="text-button"
+            @click="newAlgorithms = algorithms.map((m) => m.id)"
+          >
+            全选</button
+          ><button
+            type="button"
+            class="text-button"
+            @click="newAlgorithms = []"
+          >
+            清空
+          </button>
+        </div>
         <p class="form-hint">
           同一任务建议只检测一类物品，保持拍摄角度与光照接近。
         </p>
@@ -645,7 +543,7 @@ onUnmounted(() => {
           </div>
           <p class="form-hint">
             高宽分别向上补齐至 14 的倍数，例如 12 × 12 → 14 ×
-            14；结果恢复原图尺寸。两个模型使用相同输入尺寸与旋转增强。
+            14；结果恢复原图尺寸。所选模型使用相同输入尺寸与旋转增强。
           </p>
           <label class="checkbox-label"
             ><input
@@ -654,14 +552,17 @@ onUnmounted(() => {
             />正常图片旋转增强</label
           >
           <p class="form-hint">
-            创建后算法和输入尺寸固定；需要更换时请新建任务。
+            创建后仍可增选模型；公共输入尺寸固定，需要更换时请新建任务。
           </p>
         </details>
         <p v-if="error" class="inline-note invalid" role="alert">{{ error }}</p>
         <div class="dialog-actions">
           <button type="button" class="button secondary" @click="modal.close()">
             取消</button
-          ><button class="button primary" :disabled="busy || !newName">
+          ><button
+            class="button primary"
+            :disabled="busy || !newName || !newAlgorithms.length"
+          >
             {{ busy ? "创建中…" : "创建任务" }}<ArrowRight :size="16" />
           </button>
         </div>
