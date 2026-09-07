@@ -15,3 +15,6 @@ dist/
 # Web 工作台的本地依赖、运行图片与构建产物。
 node_modules/
 web-data/
+
+# uv 创建的本地 Python 虚拟环境。
+.venv/
