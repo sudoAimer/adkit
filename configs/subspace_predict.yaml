@@ -1,16 +1,18 @@
 model:
   name: subspacead
-  weights: weights/dinov2_with_registers_giant
+  backend: timm
+  encoder_name: vit_small_patch14_dinov2.lvd142m
+  weights: weights/dinov2_vits14/model.safetensors
   device: cuda
 data:
-  alignment: legacy # historical official preprocessing
+  alignment: pad
   format: folder
   test_path: datasets/mvtec-ad/bottle/test/broken_large/000.png
-  image_size: 672
+  image_size: [672, 672]
 run:
   mode: predict
-  checkpoint: outputs/subspace_bottle/seed_42/model.pt
+  checkpoint: outputs/subspace_small_bottle/seed_42/model.pt
 output:
-  directory: outputs/subspace_reloaded
+  directory: outputs/subspace_small_reloaded
   save_maps: true
   visualize: true

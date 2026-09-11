@@ -21,6 +21,7 @@ from safetensors.torch import load_file
 
 from .base import BaseDetector
 from .data import pad_to_patch
+from .dinov2 import input_tokens
 
 
 def render_map(patch_map, shape, sigma=4.0):
@@ -113,18 +114,7 @@ class AnomalyDinoDetector(BaseDetector):
         if self.positional_encoding == 'timm':
             tokens = self.encoder.forward_features(batch)
         else:
-            # DINOv2's historical +0.1 scale factor and antialias=False differ
-            # from timm's dynamic interpolation. Preserve the original math.
-            x = self.encoder.patch_embed(batch)
-            b, h, w, dim = x.shape
-            x = torch.cat((self.encoder.cls_token.expand(b, -1, -1), x.reshape(b, -1, dim)), dim=1)
-            positions = self.encoder.pos_embed
-            side = int((positions.shape[1]-1)**.5)
-            if (h, w) != (side, side):
-                patches = F.interpolate(positions[:, 1:].reshape(1, side, side, dim).permute(0, 3, 1, 2),
-                                        scale_factor=((h+.1)/side, (w+.1)/side), mode='bicubic', antialias=False)
-                positions = torch.cat((positions[:, :1], patches.permute(0, 2, 3, 1).reshape(1, h*w, dim)), dim=1)
-            x = self.encoder.norm_pre(self.encoder.pos_drop(x+positions))
+            x = input_tokens(self.encoder, batch, self.positional_encoding)
             tokens = self.encoder.norm(self.encoder.blocks(x))
         return tokens[:, self.encoder.num_prefix_tokens:]
 

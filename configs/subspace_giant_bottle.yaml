@@ -1,19 +1,18 @@
 model:
   name: subspacead
-  backend: timm
-  encoder_name: vit_small_patch14_dinov2.lvd142m
-  weights: weights/dinov2_vits14/model.safetensors
+  backend: transformers
+  weights: weights/dinov2_with_registers_giant
   device: cuda
-  layers: [-4, -5]
+  layers: [-12, -13, -14, -15, -16, -17, -18]
   explained_variance: 0.99
   components: null
   pca_device: cuda
 data:
-  alignment: pad
+  alignment: legacy # historical official preprocessing
   format: mvtec
   root: datasets/mvtec-ad
   category: bottle
-  image_size: [672, 672]
+  image_size: 672
   augmentation: subspacead
   aug_count: 30
   shots: 1
@@ -25,7 +24,7 @@ run:
   cpu_threads: 4
   checkpoint: null
 output:
-  directory: outputs/subspace_small_bottle
+  directory: outputs/subspace_bottle
   save_maps: true
   visualize: true
 evaluation:

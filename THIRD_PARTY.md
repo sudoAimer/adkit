@@ -24,7 +24,7 @@ anomalib's 2D morphology; bottle does not enable masking.
 Downloaded dataset and weight repositories/revisions/checksums are recorded alongside
 the assets. Their original license metadata is retained separately from the source code.
 
-SubspaceAD uses the official Hugging Face DINOv2-with-registers-Giant weights and
+The historical SubspaceAD Giant backend uses the official Hugging Face DINOv2-with-registers-Giant weights and
 Transformers 4.57.6 eager attention. Runtime inference does not request attention
 maps, because the official bottle benchmark does not use saliency masking.
 The independent reference harness disables only unused attention retention and
@@ -47,3 +47,7 @@ are saved separately for display. The shared exact AUPRO and the repository's
 Source: open-edge-platform/anomalib, revision `3759687e76395c4d6d239552d3bf6d72e003da78`, Apache-2.0. The unmodified torch model, revision and license are retained in `references/super_add/`.
 
 Adapted overlapping tile ownership, DINOv3 unnormalized intermediate features, random-subset density coreset sampling, Euclidean 1-NN/channel scaling, Gaussian maps and top-quantile scoring. Local timm weights replace downloads; CPU banks and both-axis chunking bound device memory. Tiles execute sequentially. Added minimum-tile padding, bounded degenerate sampling and a strict bank cap. Defaults use S/16 instead of upstream H+/16. The anomalib normal-validation threshold postprocessor and paper-specific morphology/downsampling are not included. See `docs/superadd.md`.
+
+## SubspaceAD Small default
+
+The default now uses the same local timm `vit_small_patch14_dinov2.lvd142m` state dict and official positional interpolation as AnomalyDINO. Intermediate hidden states are averaged without final LayerNorm, preserving SubspaceAD feature semantics. Small/Base layer selection `[-4,-5]` follows the pinned CLendering/SubspaceAD `scripts/backbone_ablation.sh` (revision `ef56d5c8ab2f1feb7dda1c93b25cc3f73f0960d7`). Indexing includes embedding state 0. The Transformers Giant backend and old checkpoints remain supported; its reproduction configs have explicit `subspace_giant_*` names. Existing Giant reports are not Small accuracy claims.

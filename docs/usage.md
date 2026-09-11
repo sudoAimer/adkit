@@ -38,14 +38,14 @@ prediction = detector.predict(batch)
 
 ### SubspaceAD
 
-先安装 `subspacead` 可选依赖并准备本地模型目录。建库与预测都应使用检测器的 `processor`：
+默认使用与 AnomalyDINO 相同的 timm DINOv2 Small 权重文件，无需额外下载模型。`processor=None` 时使用共享 ImageNet 预处理；仅旧 Transformers 目录后端需要 `subspacead` 可选依赖。
 
 ```python
 from adkit.subspacead import SubspaceADDetector
 from adkit.data import image_paths, prepare, read_rgb, ReferenceBatches
 
 detector = SubspaceADDetector(
-    weights="weights/dinov2_with_registers_giant",
+    weights="weights/dinov2_vits14/model.safetensors",
     device="cpu",
     explained_variance=0.99,
 )
@@ -63,9 +63,12 @@ prediction = detector.predict(batch)
 
 | 参数 | 用途 |
 |---|---|
-| `weights` | 包含权重、模型配置与预处理配置的本地目录 |
+| `weights` | 默认 timm Small 权重文件；也支持原 Transformers 本地模型目录 |
+| `backend` | `auto` 按文件/目录选择 `timm`/`transformers`；可显式指定 |
+| `encoder_name` | timm 默认 `vit_small_patch14_dinov2.lvd142m` |
+| `positional_encoding` | timm 后端默认 `official`，与 AnomalyDINO 的位置插值一致 |
 | `device` / `pca_device` | 特征提取 / PCA 设备，后者默认跟随前者 |
-| `layers` | 参与平均的隐藏层，默认 `[-12,-13,-14,-15,-16,-17,-18]` |
+| `layers` | 参与平均的隐藏状态；Small/Base 默认 `[-4,-5]`，Giant 保留原七层选择 |
 | `explained_variance` | 累计解释方差目标，默认 0.99 |
 | `components` | 指定 PCA 维数，设置后优先于解释方差目标 |
 
@@ -185,3 +188,5 @@ original_map = restore_map(prediction["anomaly_map"][0, 0].numpy(), geometry)
 
 直接调用 `fit` / `predict` 也接受不整除的 BCHW Tensor，内部补边，`anomaly_map` 返回传入 Tensor 的高宽；`patch_map` 对应补齐后的 patch 网格。
 历史 YAML 检查点预测需保持与建库相同的尺寸和 `alignment`。历史官方示例已显式设为 `legacy`。
+
+SubspaceAD 的层编号保持 Transformers `hidden_states` 语义：0 为 embedding 输出，1 为第一个 block 输出，负数从 `depth+1` 个状态末尾计数。Small 的 `[-4,-5]` 对应第 9/8 个 block 输出（从 1 开始），不做最终 LayerNorm。新检查点保存实际后端；不含后端字段的原格式 v2 检查点按 Transformers 加载。Small 不能复用 Giant PCA 状态或判定阈值。
