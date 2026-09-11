@@ -1,0 +1,17 @@
+model:
+  name: superadd
+  weights: weights/dinov3_vits16/model.safetensors
+  device: cuda
+data:
+  alignment: pad
+  format: folder
+  test_path: datasets/predict
+  image_size: 448
+run:
+  mode: predict
+  checkpoint: outputs/superadd_bottle/seed_0/model.pt
+  cpu_threads: 4
+output:
+  directory: outputs/superadd_predict
+  save_maps: true
+  visualize: true

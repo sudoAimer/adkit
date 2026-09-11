@@ -44,10 +44,10 @@ def run(client, base, operation, models):
     pytest.fail('Job did not finish')
 
 
-def test_four_models_selection_addition_and_isolated_reruns(workspace):
+def test_five_models_selection_addition_and_isolated_reruns(workspace):
     client, base, root, records = workspace
     models = [m['id'] for m in client.get('/api/settings').json()['algorithms']]
-    assert models == ['anomalydino', 'subspacead', 'third', 'fourth']
+    assert models == ['anomalydino', 'subspacead', 'superadd', 'third', 'fourth']
     first = run(client, base, 'fit', ['anomalydino'])
     first = run(client, base, 'predict', ['anomalydino'])
     original = copy.deepcopy(first['results'])
@@ -56,11 +56,11 @@ def test_four_models_selection_addition_and_isolated_reruns(workspace):
     assert added['results'] == original
     assert added['models']['anomalydino']['history'] == history
     # Selection may introduce a registered model without an extra attach request.
-    run(client,base,'fit',['subspacead','third','fourth'])
+    run(client,base,'fit',['subspacead','superadd','third','fourth'])
     task = run(client,base,'predict',models)
-    assert len(task['results']) == 4 and task['job']['completed'] == 4
+    assert len(task['results']) == 5 and task['job']['completed'] == 5
     assert all(m['model_ready'] for m in task['models'].values())
-    assert len(list((root/task['id']).glob('model_*.pt'))) == 4
+    assert len(list((root/task['id']).glob('model_*.pt'))) == 5
     for id in models:
         assert records[id][0].equal(records['anomalydino'][0])
         record = task['models'][id]['history'][-1]
@@ -74,7 +74,7 @@ def test_four_models_selection_addition_and_isolated_reruns(workspace):
     assert {id:task['models'][id] for id in other_states} == other_states
     task = run(client,base,'predict',['third'])
     assert [r for r in task['results'] if r['algorithm'] != 'third'] == other_results
-    assert len(task['results']) == 4  # replacement, never duplicates
+    assert len(task['results']) == 5  # replacement, never duplicates
 
 
 def test_analyze_prepares_and_reuses_reference(workspace):
