@@ -2,7 +2,7 @@ name: CPU tests
 on:
   pull_request:
   push:
-    branches: [main, 'codex/superadd-*']
+    branches: [main]
 permissions:
   contents: read
 jobs:

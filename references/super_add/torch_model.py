@@ -695,4 +695,3 @@ class SuperADDModel(DynamicBufferMixin, nn.Module):
             vals.append(chunk_vals)
             idxs.append(chunk_idx)
         return torch.cat(vals, dim=1), torch.cat(idxs, dim=1)
-
