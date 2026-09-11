@@ -46,5 +46,7 @@ MODEL_REGISTRY = {
         ModelSpec('subspacead', 'SubspaceAD', 'ADKIT_SUBSPACEAD_WEIGHTS',
                   'weights/dinov2_with_registers_giant',
                   ('model.safetensors', 'config.json', 'preprocessor_config.json')),
+        ModelSpec('superadd', 'SuperADD', 'ADKIT_SUPERADD_WEIGHTS',
+                  'weights/dinov3_vits16/model.safetensors'),
     ]
 }

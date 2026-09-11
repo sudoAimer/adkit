@@ -1,6 +1,6 @@
 # adkit
 
-基于正常样本的图像异常检测工具，支持 **AnomalyDINO** 和 **SubspaceAD**。使用预训练骨干提取正常特征并建立参考库，再对待测图片输出异常分数与异常图。
+基于正常样本的图像异常检测工具，支持 **AnomalyDINO**、**SubspaceAD** 和 **SuperADD**。使用预训练骨干提取正常特征并建立参考库，再对待测图片输出异常分数与异常图。
 
 ## 功能
 
@@ -44,7 +44,8 @@ uv pip install -e . --torch-backend=auto
 | Python / 命令行，AnomalyDINO | `uv pip install -e . --torch-backend=auto` |
 | Python / 命令行，包含 SubspaceAD | `uv pip install -e ".[subspacead]" --torch-backend=auto` |
 | 网页工作台，AnomalyDINO | `uv pip install -e ".[web]" --torch-backend=auto` |
-| 网页工作台，包含两个算法 | `uv pip install -e ".[web,subspacead]" --torch-backend=auto` |
+| Python / 命令行，SuperADD | `uv pip install -e ".[superadd]" --torch-backend=auto` |
+| 网页工作台，包含三个算法 | `uv pip install -e ".[web,subspacead,superadd]" --torch-backend=auto` |
 
 环境激活后直接使用 `python` 和 `adkit` 命令。CPU/CUDA 选择、设备配置和环境复现见 [uv 环境配置](docs/environment.md)。
 
@@ -126,3 +127,8 @@ python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000 
 ## 许可证
 
 本项目使用 [Apache-2.0](LICENSE) 许可证。第三方代码与模型权重遵循各自的许可证，来源见 [THIRD_PARTY.md](THIRD_PARTY.md) 和对应模型页面。
+
+
+## SuperADD
+
+新增基于 DINOv3 的重叠分块、多层欧氏最近邻检测器。安装、权重格式、参数及与上游的差异见 [SuperADD 使用说明](docs/superadd.md)。示例：`adkit --config configs/superadd_bottle.yaml`。

@@ -12,7 +12,10 @@ def _detector_class(name: str) -> type[BaseDetector]:
     if name == "subspacead":
         from .subspacead import SubspaceADDetector
         return SubspaceADDetector
-    raise ValueError(f"Unknown algorithm: {name!r}. Available: anomalydino, subspacead")
+    if name == "superadd":
+        from .superadd import SuperADDDetector
+        return SuperADDDetector
+    raise ValueError(f"Unknown algorithm: {name!r}. Available: anomalydino, subspacead, superadd")
 
 
 def create_detector(name: str, **kwargs) -> BaseDetector:

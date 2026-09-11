@@ -13,7 +13,7 @@ Original source snapshots and Apache-2.0 licenses are retained in `references/`.
 Adaptations: removed Lightning, anomalib data types and dynamic-buffer dependencies;
 explicit CPU memory bank serialization; exact chunked search; local safetensors;
 official DINOv2 position interpolation; standalone configuration/data/evaluation.
-Coreset sampling is intentionally omitted: the baseline retains every reference patch.
+AnomalyDINO omits coreset sampling and retains every reference patch; SuperADD uses per-layer distance-based coreset sampling.
 
 The `official` interpolation option implements the original non-register DINOv2
 bicubic scale factor `(grid + 0.1) / pretrained_grid`, without antialiasing.
@@ -40,3 +40,10 @@ SubspaceAD pixel metrics use its 672x672 output space, and masks are resized wit
 nearest-neighbor interpolation, matching the repository. Native-resolution maps
 are saved separately for display. The shared exact AUPRO and the repository's
 300-threshold AUPRO are reported separately.
+
+
+## SuperADD
+
+Source: open-edge-platform/anomalib, revision `3759687e76395c4d6d239552d3bf6d72e003da78`, Apache-2.0. The unmodified torch model, revision and license are retained in `references/super_add/`.
+
+Adapted overlapping tile ownership, DINOv3 unnormalized intermediate features, random-subset density coreset sampling, Euclidean 1-NN/channel scaling, Gaussian maps and top-quantile scoring. Local timm weights replace downloads; CPU banks and both-axis chunking bound device memory. Tiles execute sequentially. Added minimum-tile padding, bounded degenerate sampling and a strict bank cap. Defaults use S/16 instead of upstream H+/16. The anomalib normal-validation threshold postprocessor and paper-specific morphology/downsampling are not included. See `docs/superadd.md`.

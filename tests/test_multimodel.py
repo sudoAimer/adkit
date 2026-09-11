@@ -47,7 +47,7 @@ def run(client, base, operation, models):
 def test_four_models_selection_addition_and_isolated_reruns(workspace):
     client, base, root, records = workspace
     models = [m['id'] for m in client.get('/api/settings').json()['algorithms']]
-    assert models == ['anomalydino', 'subspacead', 'third', 'fourth']
+    assert models == ['anomalydino', 'subspacead', 'superadd', 'third', 'fourth']
     first = run(client, base, 'fit', ['anomalydino'])
     first = run(client, base, 'predict', ['anomalydino'])
     original = copy.deepcopy(first['results'])

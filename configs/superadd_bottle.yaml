@@ -1,0 +1,34 @@
+model:
+  name: superadd
+  weights: weights/dinov3_vits16/model.safetensors
+  encoder_name: vit_small_patch16_dinov3
+  device: cuda
+  layers: [3, 5, 8, 10]
+  tile_size: 448
+  patch_overlap: 16
+  max_database_size: 100000
+  subsampling_iterations: 100
+  gaussian_blur_sigma: 4.0
+  score_quantile: 0.001
+  query_chunk: 1024
+  bank_chunk: 16384
+data:
+  alignment: pad
+  format: mvtec
+  root: datasets/mvtec-ad
+  category: bottle
+  image_size: 448
+  rotation: false
+  shots: -1
+  sampling: official
+run:
+  mode: evaluate
+  seeds: [0]
+  batch_size: 1
+  cpu_threads: 4
+output:
+  directory: outputs/superadd_bottle
+  save_maps: true
+  visualize: true
+evaluation:
+  pro_fpr_limit: 0.3

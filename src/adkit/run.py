@@ -76,7 +76,8 @@ def run(config):
             synchronize(model.device)
             start = time.perf_counter()
             model.fit(ReferenceBatches(selected, data, config['run'].get('batch_size', 1),
-                                       processor=getattr(model,'processor',None)))
+                                       processor=getattr(model,'processor',None),
+                                       patch_size=model.patch_size))
             synchronize(model.device)
             fit_seconds = time.perf_counter()-start
             model.metadata = {'reference_samples': [str(p) for p in selected], 'data': data, 'seed': seed}
