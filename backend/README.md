@@ -6,10 +6,10 @@ Vue 3 + FastAPI 单人工作台，支持上传正常图片建库、批量检测�
 
 ## 安装与启动
 
-先按 [环境配置](../docs/environment.md) 创建并激活 `.venv`。在仓库根目录安装工作台依赖；需要 SubspaceAD 时一并选择该功能：
+先按 [环境配置](../docs/environment.md) 创建并激活 `.venv`。SubspaceAD 默认共用 AnomalyDINO 的 Small 权重；仅旧 Transformers 后端需要额外 `subspacead` 依赖：
 
 ```bash
-uv pip install -e ".[web,subspacead]" --torch-backend=auto
+uv pip install -e ".[web]" --torch-backend=auto
 ```
 
 仅使用 AnomalyDINO 时安装 `.[web]` 即可。CPU 环境将 `auto` 改为 `cpu`。按 [权重说明](../README.md#准备权重) 准备所选算法的本地文件。
@@ -81,7 +81,7 @@ python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000 
 |---|---|
 | `ADKIT_DEVICE` | `cuda`，可设为 `cpu` |
 | `ADKIT_ANOMALYDINO_WEIGHTS` | `weights/dinov2_vits14/model.safetensors` |
-| `ADKIT_SUBSPACEAD_WEIGHTS` | `weights/dinov2_with_registers_giant` |
+| `ADKIT_SUBSPACEAD_WEIGHTS` | `weights/dinov2_vits14/model.safetensors`（与 AnomalyDINO 共用） |
 | `ADKIT_DATA_DIR` | `web-data`，保存任务、图片、检查点与结果 |
 | `ADKIT_FRONTEND_DIST` | `frontend/dist`，前端构建目录 |
 

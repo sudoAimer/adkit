@@ -56,7 +56,7 @@ uv pip install -e . --torch-backend=auto
 | 算法 | 权重来源 | 默认位置与文件 |
 |---|---|---|
 | AnomalyDINO | [timm DINOv2 ViT-S/14](https://huggingface.co/timm/vit_small_patch14_dinov2.lvd142m) | `weights/dinov2_vits14/model.safetensors` |
-| SubspaceAD | [DINOv2 with registers Giant](https://huggingface.co/facebook/dinov2-with-registers-giant) | `weights/dinov2_with_registers_giant/`，包含 `model.safetensors`、`config.json`、`preprocessor_config.json` |
+| SubspaceAD | 与 AnomalyDINO 共用 DINOv2 Small（无 registers，timm 格式） | `weights/dinov2_vits14/model.safetensors` |
 
 权重和图片不随仓库提供，程序不会在建库或推理时自动下载权重。
 
@@ -132,3 +132,5 @@ python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000 
 ## SuperADD
 
 新增基于 DINOv3 的重叠分块、多层欧氏最近邻检测器。安装、权重格式、参数及与上游的差异见 [SuperADD 使用说明](docs/superadd.md)。示例：`adkit --config configs/superadd_bottle.yaml`。
+
+SubspaceAD 默认已切换到与 AnomalyDINO 相同的 DINOv2-S/14 骨干和本地权重文件，按作者 Small 配置平均 `[-4,-5]` 中间隐藏状态。PCA 和近邻评分仍各自独立。Giant 的历史配置保留为 `configs/subspace_giant_bottle.yaml`；切换骨干后需重新建库并校准阈值。论文精度对比见 [Small 骨干说明](docs/subspace-small.md)。

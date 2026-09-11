@@ -34,7 +34,7 @@ spec.loader.exec_module(official)
 
 def run_seed(seed):
     """运行单个种子的官方 SubspaceAD 对照并记录差异。"""
-    config = yaml.safe_load((ROOT/'configs/subspace_bottle.yaml').read_text())
+    config = yaml.safe_load((ROOT/'configs/subspace_giant_bottle.yaml').read_text())
     output = ROOT/'outputs/subspace_official_reference'/f'seed_{seed}'
     output.mkdir(parents=True,exist_ok=True)
     _, records = samples(config['data'])

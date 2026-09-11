@@ -1,0 +1,17 @@
+model:
+  name: subspacead
+  backend: transformers
+  weights: weights/dinov2_with_registers_giant
+  device: cuda
+data:
+  alignment: legacy # historical official preprocessing
+  format: folder
+  test_path: datasets/mvtec-ad/bottle/test/broken_large/000.png
+  image_size: 672
+run:
+  mode: predict
+  checkpoint: outputs/subspace_bottle/seed_42/model.pt
+output:
+  directory: outputs/subspace_reloaded
+  save_maps: true
+  visualize: true

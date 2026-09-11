@@ -29,7 +29,7 @@ python tools/compare_official.py
 SubspaceAD：
 
 ```bash
-adkit --config configs/subspace_bottle.yaml
+adkit --config configs/subspace_giant_bottle.yaml
 python tools/compare_subspace_official.py
 ```
 
@@ -56,9 +56,9 @@ python -m pytest -q
 
 AnomalyDINO 的 `official` 采样对排序后的正常图片取 `[seed * shots : (seed + 1) * shots]`。预处理保持比例缩放短边，并裁去底部和右侧不足一个 patch 的余量；输出原图尺度异常图时先缩放 patch 距离图，再高斯平滑。
 
-SubspaceAD 官方配置使用 672×672 输入，GT 掩码按最近邻插值缩放到相同尺寸。少样本增强采用原图加随机旋转，两遍 PCA 统计时重新生成增强；原图尺度异常图另行保存供展示。
+SubspaceAD 历史 Giant 官方配置（`subspace_giant_bottle.yaml`）使用 672×672 输入，GT 掩码按最近邻插值缩放到相同尺寸。少样本增强采用原图加随机旋转，两遍 PCA 统计时重新生成增强；原图尺度异常图另行保存供展示。
 
-两个算法的骨干、预处理与像素评估分辨率不同，比较时需要同时注明协议。网页工作台的固定角度增强流程也不等同于 SubspaceAD 官方少样本协议。
+历史 Giant 基线与 AnomalyDINO 的骨干、预处理及像素评估分辨率不同，比较时需要同时注明协议。网页工作台的固定角度增强流程也不等同于 SubspaceAD 官方少样本协议。
 
 ## 同批数据模型对比
 
@@ -78,3 +78,5 @@ SubspaceAD 官方配置使用 672×672 输入，GT 掩码按最近邻插值缩�
 | [SubspaceAD bottle 基线](../reports/subspace-bottle-baseline.md) | PCA、预处理、官方代码与论文参考值对照 |
 
 报告记录对应实验时的环境与结果，适用范围为报告中的数据、配置和代码版本。重新运行请使用本页的环境与命令说明。
+
+默认 `subspace_bottle.yaml` 现在使用 Small，与 AnomalyDINO 共用权重；原报告仍代表 Giant，不代表 Small 精度。Small 配置保留 672×672 和原 few-shot 增强设置，论文骨干消融脚本则使用 448px，不能直接当作本配置的实测降幅。
